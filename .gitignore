@@ -1,0 +1,17 @@
+node_modules/
+dist/
+*.log
+.env
+.env.*
+!.env.example
+
+# Never commit OAuth client secrets or tokens
+credentials.json
+client_secret*.json
+oauth-client.json
+tokens.json
+*.token
+.gmail-multi-mcp/
+
+.DS_Store
+Thumbs.db
