@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { UserFacingError } from "../errors.js";
+import { isForeignOrigin } from "../util/origin.js";
 
 const TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -199,8 +200,10 @@ export async function beginCloudSetupFlow(): Promise<PendingCloudSetup> {
         return;
       }
 
-      const origin = req.headers.origin;
-      if (origin && origin !== `http://127.0.0.1:${port}`) {
+      // Belt-and-braces on top of the loopback bind and the state token below.
+      // Only a genuine foreign website is rejected — opaque ("null") origins
+      // from embedded browser views and loopback/localhost are all legitimate.
+      if (isForeignOrigin(req.headers.origin)) {
         html(403, shell("<h1>Blocked</h1><p>That request came from another site.</p>"));
         return;
       }

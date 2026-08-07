@@ -3,6 +3,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { UserFacingError } from "../errors.js";
 import { normaliseAppPassword, verifyAppPassword } from "../mailbox/imap.js";
+import { isForeignOrigin } from "../util/origin.js";
 
 const TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -145,11 +146,11 @@ export async function beginAppPasswordFlow(): Promise<PendingAppPassword> {
 
       // Defence in depth against a web page posting here behind the user's
       // back. The state token already blocks this — a cross-origin script
-      // cannot read the form to learn it — but rejecting a mismatched Origin
-      // costs nothing. Only checked when present: some clients omit it, and
-      // requiring it would break them for no gain.
-      const origin = req.headers.origin;
-      if (origin && origin !== `http://127.0.0.1:${port}`) {
+      // cannot read the form to learn it — but rejecting a foreign Origin costs
+      // nothing. Only a genuine website is rejected: opaque ("null") origins
+      // from embedded browser views, localhost, and a missing header are all
+      // legitimate and must be let through.
+      if (isForeignOrigin(req.headers.origin)) {
         html(403, shell("<h1>Blocked</h1><p>That request came from another site.</p>"));
         return;
       }

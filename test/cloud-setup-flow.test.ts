@@ -145,3 +145,46 @@ describe("guided Cloud setup rejections", () => {
     assert.match(res.headers.get("content-security-policy") ?? "", /default-src 'none'/);
   });
 });
+
+/**
+ * Regression: an embedded/sandboxed browser view posts with `Origin: null`,
+ * which the old exact-match guard rejected — so a real user who opened the
+ * setup page inside an app pane hit a "Blocked" dead-end. A null-origin submit
+ * with otherwise-valid values must complete the flow.
+ */
+describe("guided Cloud setup accepts an opaque Origin", () => {
+  let flow: PendingCloudSetup;
+  let state: string;
+
+  before(async () => {
+    process.env.GMAIL_MCP_NO_BROWSER = "1";
+    flow = await beginCloudSetupFlow();
+    flow.completed.catch(() => {});
+    const html = await (await fetch(flow.setupUrl)).text();
+    state = /name="state" value="([^"]+)"/.exec(html)?.[1] ?? "";
+  });
+
+  after(() => {
+    flow.cancel();
+  });
+
+  it("completes when the browser sends Origin: null", async () => {
+    const res = await fetch(new URL("/submit", flow.setupUrl), {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        origin: "null",
+      },
+      body: new URLSearchParams({
+        state,
+        client_id: "1234567890-embedded.apps.googleusercontent.com",
+        client_secret: "GOCSPX-embedded",
+      }).toString(),
+    });
+    assert.equal(res.status, 200);
+    assert.match(await res.text(), /Setup complete/);
+
+    const result = await flow.completed;
+    assert.equal(result.clientId, "1234567890-embedded.apps.googleusercontent.com");
+  });
+});
