@@ -10,7 +10,9 @@ Most Gmail MCP servers connect one account and expose `send_email`. That is fine
 
 ---
 
-> **Status: 0.1.0, not yet on npm.** The safety logic and MCP protocol layer are covered by 62 tests, including an end-to-end handshake against the built server. The Google OAuth flow and live Gmail calls have not yet been exercised against a real Google project — if you are the first to try that path, please [open an issue](https://github.com/dtaveeva/gmail-multi-mcp/issues) with what you hit.
+> **Status: 0.1.0, not yet on npm.** 70 tests cover the safety logic, the MCP protocol layer (via an end-to-end handshake against the built server), and the OAuth flow up to the consent screen — authorization URL, PKCE, scope selection, and every callback rejection path.
+>
+> Two things remain unverified against real Google infrastructure: the **token exchange** that follows a successful consent, and the **live Gmail API calls**. Both need a real Cloud project and a real sign-in. If you are the first to walk that path, please [open an issue](https://github.com/dtaveeva/gmail-multi-mcp/issues) with whatever you hit.
 
 ## Install
 
@@ -209,6 +211,7 @@ Every action lands in `~/.gmail-multi-mcp/audit.log` as JSONL. Message bodies ar
 | `GMAIL_MCP_MAX_BODY_CHARS` | `20000` | Truncation point for message bodies |
 | `GMAIL_MCP_PASSPHRASE` | unset | Encrypts the file-based token store with your passphrase |
 | `GMAIL_MCP_FORCE_FILE_STORE` | off | Skip the OS keychain and always use the encrypted file |
+| `GMAIL_MCP_NO_BROWSER` | off | Do not auto-open a browser during `auth add`; print the URL instead |
 
 A cautious starting point for a shared or unattended machine:
 

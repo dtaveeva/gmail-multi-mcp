@@ -18,6 +18,9 @@ export interface AuthResult {
 }
 
 function openBrowser(url: string): void {
+  // Headless servers, SSH sessions, and CI have no browser to open. The URL is
+  // always printed to stderr, so skipping the spawn loses nothing.
+  if (process.env.GMAIL_MCP_NO_BROWSER === "1") return;
   try {
     const [cmd, args] =
       process.platform === "win32"

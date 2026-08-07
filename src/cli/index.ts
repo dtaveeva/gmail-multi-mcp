@@ -38,6 +38,8 @@ ENVIRONMENT
   GMAIL_MCP_READONLY=1       Force every account to readonly
   GMAIL_MCP_DRY_RUN=1        Validate and log writes without executing them
   GMAIL_MCP_CONFIRM_MODE     "inline" (default) or "strict" (token to terminal)
+  GMAIL_MCP_NO_BROWSER=1     Print the auth URL instead of opening a browser
+                             (use this over SSH or on a headless machine)
   GMAIL_MCP_MAX_SENDS_PER_HOUR       Default 10
   GMAIL_MCP_MAX_MUTATIONS_PER_HOUR   Default 60
 `;
