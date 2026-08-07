@@ -42,7 +42,11 @@ describe("server smoke test", () => {
   it("advertises every expected tool", async () => {
     const names = (await client.listTools()).tools.map((t) => t.name).sort();
     assert.deepEqual(names, [
+      "gmail_configure_oauth_client",
+      "gmail_connect_account",
+      "gmail_connection_status",
       "gmail_create_draft",
+      "gmail_disconnect_account",
       "gmail_list_accounts",
       "gmail_list_labels",
       "gmail_modify_labels",
@@ -51,8 +55,46 @@ describe("server smoke test", () => {
       "gmail_search",
       "gmail_send",
       "gmail_send_draft",
+      "gmail_setup_status",
       "gmail_trash",
     ]);
+  });
+
+  it("explains what setup is missing rather than failing", async () => {
+    const res = await client.callTool({ name: "gmail_setup_status", arguments: {} });
+    const body = (res.content as { type: string; text: string }[])[0]?.text ?? "";
+    assert.match(body, /OAuth client: NOT configured/);
+    assert.match(body, /console\.cloud\.google\.com/);
+    assert.match(body, /Desktop app/);
+  });
+
+  it("routes an account connection to setup guidance when unconfigured", async () => {
+    // Must not open a browser or hang: with no OAuth client there is nothing to
+    // sign in to, and the model needs to be told what the user has to do.
+    const res = await client.callTool({
+      name: "gmail_connect_account",
+      arguments: { tier: "readonly", wait_seconds: 5 },
+    });
+    const body = (res.content as { type: string; text: string }[])[0]?.text ?? "";
+    assert.match(body, /no Google OAuth client yet/);
+  });
+
+  it("rejects a client id that is not a Google OAuth client id", async () => {
+    const res = await client.callTool({
+      name: "gmail_configure_oauth_client",
+      arguments: { client_id: "totally-made-up", client_secret: "x" },
+    });
+    const body = (res.content as { type: string; text: string }[])[0]?.text ?? "";
+    assert.equal(res.isError, true);
+    assert.match(body, /does not look like a Google OAuth client id/);
+  });
+
+  it("warns against collecting an app password through the conversation", async () => {
+    // An app password pasted into chat is written into the transcript. The
+    // guidance must send the user to the terminal for that path instead.
+    const res = await client.callTool({ name: "gmail_setup_status", arguments: {} });
+    const body = (res.content as { type: string; text: string }[])[0]?.text ?? "";
+    assert.match(body, /Do not ask them to paste an app password here/);
   });
 
   it("exposes no permanent-delete or mail-settings tool", async () => {

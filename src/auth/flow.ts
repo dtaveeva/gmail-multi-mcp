@@ -38,11 +38,28 @@ function page(title: string, body: string): string {
  *   straight to the consent screen for *that* account. Connecting a second
  *   mailbox would then silently re-authorize the first one.
  */
-export async function runOAuthFlow(
+export interface PendingOAuth {
+  /** The Google sign-in URL. Already opened in a browser by the caller if able. */
+  authUrl: string;
+  /** Resolves when the user finishes in the browser; rejects on decline or timeout. */
+  completed: Promise<AuthResult>;
+  /** Abandon the flow and release the listener. */
+  cancel(): void;
+}
+
+/**
+ * Start the flow and return immediately with the sign-in URL.
+ *
+ * Split out from runOAuthFlow so an MCP tool call can kick off a sign-in,
+ * return "your browser is open" straight away, and let a later call collect the
+ * result. Blocking a tool call for the minute a human takes to click through
+ * Google would hit client-side timeouts.
+ */
+export async function beginOAuthFlow(
   clientConfig: OAuthClientConfig,
   tier: Tier,
   loginHint?: string,
-): Promise<AuthResult> {
+): Promise<PendingOAuth> {
   const scopes = [...SCOPES_BY_TIER[tier]];
   const state = crypto.randomBytes(24).toString("base64url");
 
@@ -67,7 +84,7 @@ export async function runOAuthFlow(
     ...(loginHint ? { login_hint: loginHint } : {}),
   });
 
-  const code = await new Promise<string>((resolve, reject) => {
+  const codePromise = new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new UserFacingError("Timed out waiting for Google authorization."));
     }, TIMEOUT_MS);
@@ -123,44 +140,63 @@ export async function runOAuthFlow(
 
       finish(
         200,
-        page("Account connected", "You can close this tab and return to your terminal."),
+        page("Account connected", "You can close this tab and go back to where you were."),
         returnedCode,
       );
     });
-
-    process.stderr.write(
-      `\nOpening your browser to authorize Gmail access (tier: ${tier}).\n` +
-        `If it does not open, paste this URL:\n\n${authUrl}\n\n`,
-    );
-    openBrowser(authUrl);
   }).finally(() => server.close());
 
-  const { tokens } = await oauth.getToken({ code, codeVerifier });
+  const completed = codePromise.then(async (code) => {
+    const { tokens } = await oauth.getToken({ code, codeVerifier });
 
-  if (!tokens.refresh_token) {
-    throw new UserFacingError(
-      "Google did not return a refresh token.",
-      "Revoke this app's access at https://myaccount.google.com/permissions and " +
-        "run the command again, so the consent screen is shown fresh.",
-    );
-  }
+    if (!tokens.refresh_token) {
+      throw new UserFacingError(
+        "Google did not return a refresh token.",
+        "Revoke this app's access at https://myaccount.google.com/permissions and " +
+          "try again, so the consent screen is shown fresh.",
+      );
+    }
 
-  oauth.setCredentials(tokens);
-  const profile = await gmail({ version: "v1", auth: oauth }).users.getProfile({
-    userId: "me",
+    oauth.setCredentials(tokens);
+    const profile = await gmail({ version: "v1", auth: oauth }).users.getProfile({
+      userId: "me",
+    });
+    const email = profile.data.emailAddress;
+    if (!email) {
+      throw new UserFacingError("Could not read the email address for this account.");
+    }
+
+    return {
+      email,
+      token: {
+        refresh_token: tokens.refresh_token,
+        ...(tokens.access_token ? { access_token: tokens.access_token } : {}),
+        ...(tokens.expiry_date ? { expiry_date: tokens.expiry_date } : {}),
+        scope: scopes.join(" "),
+      },
+    };
   });
-  const email = profile.data.emailAddress;
-  if (!email) {
-    throw new UserFacingError("Could not read the email address for this account.");
-  }
 
   return {
-    email,
-    token: {
-      refresh_token: tokens.refresh_token,
-      ...(tokens.access_token ? { access_token: tokens.access_token } : {}),
-      ...(tokens.expiry_date ? { expiry_date: tokens.expiry_date } : {}),
-      scope: scopes.join(" "),
-    },
+    authUrl,
+    completed,
+    cancel: () => server.close(),
   };
+}
+
+/** Blocking variant used by the CLI, where waiting at a prompt is expected. */
+export async function runOAuthFlow(
+  clientConfig: OAuthClientConfig,
+  tier: Tier,
+  loginHint?: string,
+): Promise<AuthResult> {
+  const pending = await beginOAuthFlow(clientConfig, tier, loginHint);
+
+  process.stderr.write(
+    `\nOpening your browser to authorize Gmail access (tier: ${tier}).\n` +
+      `If it does not open, paste this URL:\n\n${pending.authUrl}\n\n`,
+  );
+  openBrowser(pending.authUrl);
+
+  return pending.completed;
 }

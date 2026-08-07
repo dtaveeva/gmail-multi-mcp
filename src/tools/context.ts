@@ -1,4 +1,6 @@
 import type { Account, AccountRegistry } from "../auth/accounts.js";
+import type { OAuthClientConfig } from "../auth/client.js";
+import type { TokenStore } from "../auth/store.js";
 import type { Config } from "../config.js";
 import { renderError } from "../errors.js";
 import { explainGoogleError } from "../gmail/client.js";
@@ -14,6 +16,12 @@ export interface ToolContext {
   confirmations: ConfirmationStore;
   limiter: RateLimiter;
   audit: AuditLog;
+  /** Credential storage, needed by the tools that connect and disconnect accounts. */
+  store: TokenStore;
+  /** Resolves the user's OAuth client, or rejects if setup is incomplete. */
+  oauthClient: () => Promise<OAuthClientConfig>;
+  /** Drop the memoised OAuth client after it is written or replaced. */
+  resetOAuthClient: () => void;
 }
 
 export interface ToolResult {

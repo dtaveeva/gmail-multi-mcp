@@ -205,10 +205,27 @@ Ask it to `list my gmail accounts` to confirm the connection.
 
 ---
 
+## Connecting accounts from inside the chat
+
+You do not have to use a terminal. Once the server is wired into your client, just ask:
+
+> add my work gmail
+
+The assistant calls `gmail_connect_account`, a **Google sign-in opens in your browser**, you pick the account and approve, and you are done. The tool returns as soon as the browser opens rather than blocking, so nothing times out while you click; the assistant calls `gmail_connection_status` afterwards to collect the result.
+
+If the Google Cloud client is not set up yet, `gmail_setup_status` returns the console links and the exact steps, and `gmail_configure_oauth_client` stores the client id and secret you paste back. A Desktop-app client secret is a *public* client credential by OAuth's definition — Google does not treat it as confidential — which is why it is safe to hand over this way.
+
+**App passwords are deliberately terminal-only.** An app password is a full-access mailbox credential, and pasting one into a chat writes it into the conversation transcript. The server's instructions tell assistants to refuse and point you at `gmail-multi-mcp auth add-password` instead. This is the one place where OAuth is meaningfully safer than an app password: the credential never passes through the conversation at all.
+
 ## Tools
 
 | Tool | Tier needed | Confirmation |
 |---|---|---|
+| `gmail_setup_status` | — | — |
+| `gmail_configure_oauth_client` | — | — |
+| `gmail_connect_account` | — | browser sign-in |
+| `gmail_connection_status` | — | — |
+| `gmail_disconnect_account` | — | **yes** |
 | `gmail_list_accounts` | — | — |
 | `gmail_search` | readonly | — |
 | `gmail_read_message` | readonly | — |
