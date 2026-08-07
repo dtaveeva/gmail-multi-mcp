@@ -84,10 +84,15 @@ export async function beginOAuthFlow(
     ...(loginHint ? { login_hint: loginHint } : {}),
   });
 
+  // Hoisted so cancel() can clear it, and unref'd so an abandoned sign-in does
+  // not keep the process alive for the full timeout with nothing left to do.
+  let timer: NodeJS.Timeout | undefined;
+
   const codePromise = new Promise<string>((resolve, reject) => {
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       reject(new UserFacingError("Timed out waiting for Google authorization."));
     }, TIMEOUT_MS);
+    timer.unref();
 
     server.on("request", (req, res) => {
       const url = new URL(req.url ?? "/", `http://127.0.0.1:${port}`);
@@ -180,7 +185,10 @@ export async function beginOAuthFlow(
   return {
     authUrl,
     completed,
-    cancel: () => server.close(),
+    cancel: () => {
+      clearTimeout(timer);
+      server.close();
+    },
   };
 }
 

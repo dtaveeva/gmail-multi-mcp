@@ -207,15 +207,21 @@ Ask it to `list my gmail accounts` to confirm the connection.
 
 ## Connecting accounts from inside the chat
 
-You do not have to use a terminal. Once the server is wired into your client, just ask:
+No terminal and no Google Cloud project. Once the server is wired into your client, just ask:
 
 > add my work gmail
 
-The assistant calls `gmail_connect_account`, a **Google sign-in opens in your browser**, you pick the account and approve, and you are done. The tool returns as soon as the browser opens rather than blocking, so nothing times out while you click; the assistant calls `gmail_connection_status` afterwards to collect the result.
+A page opens **on your own machine** — `http://127.0.0.1:<port>` — explaining how to generate a Gmail app password, with a box to paste it into. You paste, it checks the password against Gmail, and the account is connected. Repeat for the next mailbox.
 
-If the Google Cloud client is not set up yet, `gmail_setup_status` returns the console links and the exact steps, and `gmail_configure_oauth_client` stores the client id and secret you paste back. A Desktop-app client secret is a *public* client credential by OAuth's definition — Google does not treat it as confidential — which is why it is safe to hand over this way.
+The credential goes **browser → localhost → Gmail**. It is never shown to the assistant and never written into your conversation. That is the entire reason the page exists: asking for an app password in chat would put a full-access mailbox credential into a transcript that gets stored and synced. The server's instructions tell assistants never to do that.
 
-**App passwords are deliberately terminal-only.** An app password is a full-access mailbox credential, and pasting one into a chat writes it into the conversation transcript. The server's instructions tell assistants to refuse and point you at `gmail-multi-mcp auth add-password` instead. This is the one place where OAuth is meaningfully safer than an app password: the credential never passes through the conversation at all.
+The tool returns as soon as the browser opens rather than blocking, so nothing times out while you are clicking around in Google's settings; the assistant calls `gmail_connection_status` afterwards to collect the result.
+
+### If you want Google sign-in instead
+
+Ask for it explicitly — `gmail_connect_account` takes `method: "google_signin"`. It needs the one-time Cloud project, and buys exactly one thing: **scoped read-only access that Google enforces**, so a mailbox becomes provably incapable of sending. Worth it for an inbox you want read but never written; unnecessary otherwise.
+
+If the Cloud client is not set up, `gmail_setup_status` returns the console links and steps, and `gmail_configure_oauth_client` stores the client id and secret you paste back. That much *is* safe to put in chat: a Desktop-app client is a **public client** by OAuth's definition and Google does not treat its secret as confidential. It identifies your project; it grants access to nothing.
 
 ## Tools
 

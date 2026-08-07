@@ -22,7 +22,12 @@ describe("server smoke test", () => {
     transport = new StdioClientTransport({
       command: process.execPath,
       args: [path.resolve("dist/src/index.js")],
-      env: { ...process.env, GMAIL_MCP_HOME: home } as Record<string, string>,
+      env: {
+        ...process.env,
+        GMAIL_MCP_HOME: home,
+        // Never let a test spawn a real browser window.
+        GMAIL_MCP_NO_BROWSER: "1",
+      } as Record<string, string>,
       stderr: "ignore",
     });
     client = new Client({ name: "smoke-test", version: "0.0.0" });
@@ -60,23 +65,28 @@ describe("server smoke test", () => {
     ]);
   });
 
-  it("explains what setup is missing rather than failing", async () => {
+  it("reports ready even with no Google Cloud project configured", async () => {
+    // The whole point of the app-password path: a fresh install can connect a
+    // mailbox immediately. Reporting "not configured" here would send users off
+    // to the Cloud console for no reason.
     const res = await client.callTool({ name: "gmail_setup_status", arguments: {} });
     const body = (res.content as { type: string; text: string }[])[0]?.text ?? "";
-    assert.match(body, /OAuth client: NOT configured/);
-    assert.match(body, /console\.cloud\.google\.com/);
-    assert.match(body, /Desktop app/);
+    assert.match(body, /READY/);
+    assert.match(body, /app_password\s+ready, no setup needed/);
+    assert.match(body, /google_signin\s+NOT set up/);
   });
 
-  it("routes an account connection to setup guidance when unconfigured", async () => {
-    // Must not open a browser or hang: with no OAuth client there is nothing to
-    // sign in to, and the model needs to be told what the user has to do.
+  it("points google_signin at setup guidance without a Cloud project", async () => {
     const res = await client.callTool({
       name: "gmail_connect_account",
-      arguments: { tier: "readonly", wait_seconds: 5 },
+      arguments: { method: "google_signin", tier: "readonly", wait_seconds: 5 },
     });
     const body = (res.content as { type: string; text: string }[])[0]?.text ?? "";
-    assert.match(body, /no Google OAuth client yet/);
+    assert.match(body, /Google sign-in is not available/);
+    // and must steer back to the method that needs no project
+    assert.match(body, /You do NOT need one/);
+    assert.match(body, /console\.cloud\.google\.com/);
+    assert.match(body, /Desktop app/);
   });
 
   it("rejects a client id that is not a Google OAuth client id", async () => {
@@ -89,12 +99,13 @@ describe("server smoke test", () => {
     assert.match(body, /does not look like a Google OAuth client id/);
   });
 
-  it("warns against collecting an app password through the conversation", async () => {
-    // An app password pasted into chat is written into the transcript. The
-    // guidance must send the user to the terminal for that path instead.
+  it("tells the model never to collect an app password in conversation", async () => {
+    // An app password pasted into chat is written into the transcript forever.
+    // The browser form exists precisely so it never has to be.
     const res = await client.callTool({ name: "gmail_setup_status", arguments: {} });
     const body = (res.content as { type: string; text: string }[])[0]?.text ?? "";
-    assert.match(body, /Do not ask them to paste an app password here/);
+    assert.match(body, /Do not ask the user to type an app\s+password here/);
+    assert.match(body, /collects it locally/);
   });
 
   it("exposes no permanent-delete or mail-settings tool", async () => {

@@ -2,7 +2,8 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { beginOAuthFlow, type AuthResult, type PendingOAuth } from "../auth/flow.js";
+import { beginAppPasswordFlow } from "../auth/app-password-flow.js";
+import { beginOAuthFlow } from "../auth/flow.js";
 import { TIERS, type Tier } from "../config.js";
 import { UserFacingError } from "../errors.js";
 import { openBrowser } from "../util/browser.js";
@@ -24,63 +25,58 @@ const CONSOLE = {
  * Only one at a time — concurrent sign-ins would race on the same browser and
  * make it impossible to tell which account the user actually picked.
  */
+type Settled = { ok: true; email: string } | { ok: false; error: string };
+
 class PendingConnection {
   private current:
-    | {
-        tier: Tier;
-        label: string | undefined;
-        flow: PendingOAuth;
-        settled: Promise<{ ok: true; email: string } | { ok: false; error: string }>;
-        done: boolean;
-      }
+    | { url: string; settled: Promise<Settled>; cancel: () => void; done: boolean }
     | undefined;
 
   get active(): boolean {
     return !!this.current && !this.current.done;
   }
 
-  get authUrl(): string | undefined {
-    return this.current?.flow.authUrl;
+  get url(): string | undefined {
+    return this.current?.url;
   }
 
-  start(
-    tier: Tier,
-    label: string | undefined,
-    flow: PendingOAuth,
-    onSuccess: (result: AuthResult, tier: Tier, label: string | undefined) => Promise<void>,
-  ): void {
+  /**
+   * Track an in-flight connection. `work` must resolve to the connected address
+   * *after* the account has been registered, so a caller that sees `ok` can
+   * rely on the account already being usable.
+   */
+  track(url: string, work: Promise<string>, cancel: () => void): void {
     const entry = {
-      tier,
-      label,
-      flow,
+      url,
+      cancel,
       done: false,
-      settled: flow.completed.then(
-        async (result) => {
-          await onSuccess(result, tier, label);
-          entry.done = true;
-          return { ok: true as const, email: result.email };
-        },
-        (err: unknown) => {
-          entry.done = true;
-          return {
-            ok: false as const,
-            error: err instanceof Error ? err.message : String(err),
-          };
-        },
-      ),
+      settled: null as unknown as Promise<Settled>,
     };
+    entry.settled = work.then(
+      (email) => {
+        entry.done = true;
+        return { ok: true as const, email };
+      },
+      (err: unknown) => {
+        entry.done = true;
+        return {
+          ok: false as const,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      },
+    );
     this.current = entry;
   }
 
-  /** Wait up to `ms` for the in-flight sign-in, or return null if still pending. */
-  async settle(ms: number): Promise<{ ok: true; email: string } | { ok: false; error: string } | null> {
+  /** Wait up to `ms` for the in-flight connection, or null if still pending. */
+  async settle(ms: number): Promise<Settled | null> {
     if (!this.current) return null;
     const timeout = new Promise<null>((r) => setTimeout(() => r(null), ms));
     return Promise.race([this.current.settled, timeout]);
   }
 
   cancel(): void {
-    this.current?.flow.cancel();
+    this.current?.cancel();
     this.current = undefined;
   }
 }
@@ -89,25 +85,26 @@ const pending = new PendingConnection();
 
 function setupGuidance(oauthClientPath: string): string {
   return (
-    `This server has no Google OAuth client yet, so it cannot sign anyone in.\n\n` +
-    `Tell the user they need to create one — it is free, takes about two\n` +
-    `minutes, and is done entirely in a browser:\n\n` +
+    `Google sign-in is not available: this server has no Google OAuth client.\n\n` +
+    `You do NOT need one to connect a mailbox. Call gmail_connect_account with\n` +
+    `the default method instead — it opens a local page where the user enters a\n` +
+    `Gmail app password, needs no Google Cloud project, and works right now.\n\n` +
+    `Only set up OAuth if the user specifically wants a mailbox that is provably\n` +
+    `incapable of sending. OAuth can grant read-only access that Google itself\n` +
+    `enforces; an app password always carries full access, so a readonly tier on\n` +
+    `one is enforced by this server rather than by Google.\n\n` +
+    `If they do want that, it is free, takes about two minutes, and is entirely\n` +
+    `in a browser:\n\n` +
     `  1. Create a project:      ${CONSOLE.createProject}\n` +
     `  2. Enable the Gmail API:  ${CONSOLE.enableGmail}\n` +
     `  3. Consent screen:        ${CONSOLE.consent}\n` +
-    `       Choose Internal if every mailbox is on their Google Workspace domain.\n` +
-    `       Otherwise choose External and click PUBLISH APP — if it is left in\n` +
-    `       "Testing", Google expires the sign-in after 7 days.\n` +
+    `       Choose Internal if every mailbox is on their Workspace domain.\n` +
+    `       Otherwise choose External and click PUBLISH APP — left in "Testing",\n` +
+    `       Google expires the sign-in after 7 days.\n` +
     `  4. Create credentials:    ${CONSOLE.credentials}\n` +
     `       Application type MUST be "Desktop app". Then click DOWNLOAD JSON.\n\n` +
-    `Then either:\n` +
-    `  - call gmail_configure_oauth_client with the client_id and client_secret\n` +
-    `    from that file, or\n` +
-    `  - save the file to ${oauthClientPath}\n\n` +
-    `Alternative with no Google project at all: the user can run\n` +
-    `\`gmail-multi-mcp auth add-password <email>\` in a terminal, which uses a\n` +
-    `Gmail app password instead. Do not ask them to paste an app password here —\n` +
-    `it would be written into this conversation.`
+    `Then call gmail_configure_oauth_client with the client_id and client_secret\n` +
+    `from that file, or save the file to ${oauthClientPath}`
   );
 }
 
@@ -133,20 +130,25 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
           configured = false;
         }
 
-        if (!configured) {
-          return text(
-            `OAuth client: NOT configured\nConnected accounts: ${accounts.length}\n\n` +
-              setupGuidance(ctx.cfg.oauthClientPath),
-          );
-        }
+        const listing = accounts.length
+          ? `\n${accounts.map((a) => `  ${a.email} (${a.tier}, ${a.auth ?? "oauth"})`).join("\n")}`
+          : "";
 
         return text(
-          `OAuth client: configured\n` +
-            `Connected accounts: ${accounts.length}` +
-            (accounts.length
-              ? `\n${accounts.map((a) => `  ${a.email} (${a.tier})`).join("\n")}`
-              : "") +
-            `\n\nReady to connect accounts with gmail_connect_account.`,
+          `READY — accounts can be connected right now.\n\n` +
+            `Connected accounts: ${accounts.length}${listing}\n\n` +
+            `Available methods:\n` +
+            `  app_password    ready, no setup needed. Opens a local page where the\n` +
+            `                  user enters a Gmail app password.\n` +
+            `  google_signin   ${
+              configured
+                ? "ready. Opens Google's sign-in."
+                : "NOT set up. Needs a free Google Cloud project — only worth it\n" +
+                  "                  for a mailbox that must be provably unable to send."
+            }\n\n` +
+            `Just call gmail_connect_account. Do not ask the user to type an app\n` +
+            `password here — the browser page collects it locally so it never\n` +
+            `enters this conversation.`,
         );
       }),
   );
@@ -208,11 +210,20 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
     {
       title: "Connect a Gmail account",
       description:
-        "Open a Google sign-in window so the user can connect a mailbox. Returns as " +
+        "Connect a Gmail mailbox by opening a page in the user's browser. Returns as " +
         "soon as the browser opens; if the user has not finished by then, call " +
-        "gmail_connection_status to collect the result. Choose the LOWEST tier that " +
-        "does the job — readonly accounts are enforced by Google and cannot send at all.",
+        "gmail_connection_status. Default method needs no Google Cloud project. " +
+        "Choose the LOWEST tier that does the job. Never ask the user to type an app " +
+        "password into this conversation — the browser page collects it locally.",
       inputSchema: {
+        method: z
+          .enum(["app_password", "google_signin"])
+          .default("app_password")
+          .describe(
+            "app_password needs no Google Cloud project and works immediately. " +
+              "google_signin requires the user to have set one up, but can grant " +
+              "read-only access that Google itself enforces.",
+          ),
         tier: z
           .enum(TIERS)
           .default("readonly")
@@ -221,60 +232,91 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
         email_hint: z
           .string()
           .optional()
-          .describe("Pre-select this address in Google's account chooser"),
+          .describe("Pre-select this address in Google's account chooser (google_signin only)"),
         wait_seconds: z.number().int().min(5).max(120).default(45),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
-    async ({ tier, label, email_hint, wait_seconds }) =>
+    async ({ method, tier, label, email_hint, wait_seconds }) =>
       guarded(ctx, "gmail_connect_account", "execute", () => email_hint ?? "-", async () => {
         if (pending.active) {
           return text(
-            `A sign-in is already open in the browser.\n\n` +
+            `A connection is already open in the browser at ${pending.url}\n\n` +
               `Ask the user to finish or close it, then call gmail_connection_status. ` +
-              `Only one sign-in can be in progress at a time.`,
+              `Only one can be in progress at a time.`,
           );
         }
 
-        let clientConfig;
-        try {
-          clientConfig = await ctx.oauthClient();
-        } catch {
-          return text(setupGuidance(ctx.cfg.oauthClientPath));
-        }
-
-        const flow = await beginOAuthFlow(clientConfig, tier, email_hint);
-        const opened = openBrowser(flow.authUrl);
-
-        // Registration runs in the success handler rather than inline, because
-        // the user may still be clicking when this tool call returns.
-        pending.start(tier, label, flow, async (result, connectedTier, connectedLabel) => {
-          const previous = ctx.registry.find(result.email);
-          await ctx.store.set(result.email, result.token);
+        /** Register a connected account and report its address. */
+        const register = async (
+          email: string,
+          credential: Parameters<typeof ctx.store.set>[1],
+          auth: "oauth" | "app-password",
+        ): Promise<string> => {
+          const previous = ctx.registry.find(email);
+          await ctx.store.set(email, credential);
           await ctx.registry.upsert({
-            email: result.email,
-            tier: connectedTier,
-            auth: "oauth",
-            ...(connectedLabel
-              ? { label: connectedLabel }
-              : previous?.label
-                ? { label: previous.label }
-                : {}),
+            email,
+            tier,
+            auth,
+            ...(label ? { label } : previous?.label ? { label: previous.label } : {}),
             ...(previous?.allowedRecipients
               ? { allowedRecipients: previous.allowedRecipients }
               : {}),
           });
-          await ctx.mailboxes.invalidate(result.email);
+          await ctx.mailboxes.invalidate(email);
           await ctx.audit.record({
             ts: new Date().toISOString(),
             tool: "gmail_connect_account",
-            account: result.email,
+            account: email,
             phase: "execute",
             outcome: "ok",
-            detail: { tier: connectedTier, auth: "oauth", reconnect: !!previous },
+            detail: { tier, auth, reconnect: !!previous },
           });
-        });
+          return email;
+        };
 
+        let url: string;
+        let guidance: string;
+
+        if (method === "google_signin") {
+          let clientConfig;
+          try {
+            clientConfig = await ctx.oauthClient();
+          } catch {
+            return text(setupGuidance(ctx.cfg.oauthClientPath));
+          }
+
+          const flow = await beginOAuthFlow(clientConfig, tier, email_hint);
+          url = flow.authUrl;
+          pending.track(
+            url,
+            flow.completed.then((r) => register(r.email, r.token, "oauth")),
+            flow.cancel,
+          );
+          guidance =
+            `Tell them to pick the account they want and approve access. They will\n` +
+            `see an "unverified app" warning if their Cloud project is unverified —\n` +
+            `that is expected, since they are the publisher.`;
+        } else {
+          const flow = await beginAppPasswordFlow();
+          url = flow.formUrl;
+          pending.track(
+            url,
+            flow.completed.then((r) =>
+              register(r.email, { app_password: r.appPassword }, "app-password"),
+            ),
+            flow.cancel,
+          );
+          guidance =
+            `The page runs on their own machine and explains how to generate a\n` +
+            `Gmail app password. They paste it into that page — NOT into this\n` +
+            `conversation. It goes straight to the local program and then to Gmail,\n` +
+            `so it never appears here. The page checks it against Gmail before\n` +
+            `accepting it.`;
+        }
+
+        const opened = openBrowser(url);
         const settled = await pending.settle(wait_seconds * 1000);
 
         if (settled?.ok) {
@@ -284,16 +326,14 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
           );
         }
         if (settled && !settled.ok) {
-          return text(`The sign-in did not complete: ${settled.error}`);
+          return text(`That did not complete: ${settled.error}`);
         }
 
         return text(
           (opened
-            ? `A Google sign-in window is open in the user's browser.\n\n`
-            : `Could not open a browser automatically. Give the user this link:\n${flow.authUrl}\n\n`) +
-            `Tell them to pick the account they want to connect and approve access.\n` +
-            `They will see an "unverified app" warning if the Cloud project is not\n` +
-            `verified — that is expected, since they are the publisher.\n\n` +
+            ? `A page is now open in the user's browser.\n\n`
+            : `Could not open a browser automatically. Give the user this link:\n${url}\n\n`) +
+            `${guidance}\n\n` +
             `When they say they are done, call gmail_connection_status.`,
         );
       }),
