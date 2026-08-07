@@ -73,20 +73,22 @@ describe("server smoke test", () => {
     const body = (res.content as { type: string; text: string }[])[0]?.text ?? "";
     assert.match(body, /READY/);
     assert.match(body, /app_password\s+ready, no setup needed/);
-    assert.match(body, /google_signin\s+NOT set up/);
+    assert.match(body, /google_signin\s+needs a one-time setup/);
   });
 
-  it("points google_signin at setup guidance without a Cloud project", async () => {
+  it("opens the guided setup page when google_signin has no Cloud project", async () => {
+    // Rather than dumping console links into the chat, it should put the steps
+    // in the browser next to the console tabs the user will be opening.
     const res = await client.callTool({
       name: "gmail_connect_account",
       arguments: { method: "google_signin", tier: "readonly", wait_seconds: 5 },
     });
     const body = (res.content as { type: string; text: string }[])[0]?.text ?? "";
-    assert.match(body, /Google sign-in is not available/);
-    // and must steer back to the method that needs no project
-    assert.match(body, /You do NOT need one/);
-    assert.match(body, /console\.cloud\.google\.com/);
-    assert.match(body, /Desktop app/);
+    assert.match(body, /one-time setup/);
+    assert.match(body, /step by step on the page/);
+    assert.match(body, /PUBLISH APP/);
+    // The browser is disabled in tests, so it must surface the URL instead.
+    assert.match(body, /http:\/\/127\.0\.0\.1:\d+/);
   });
 
   it("rejects a client id that is not a Google OAuth client id", async () => {

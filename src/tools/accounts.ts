@@ -3,6 +3,7 @@ import path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { beginAppPasswordFlow } from "../auth/app-password-flow.js";
+import { beginCloudSetupFlow } from "../auth/cloud-setup-flow.js";
 import { beginOAuthFlow } from "../auth/flow.js";
 import { TIERS, type Tier } from "../config.js";
 import { UserFacingError } from "../errors.js";
@@ -83,6 +84,21 @@ class PendingConnection {
 
 const pending = new PendingConnection();
 
+/** Persist a user's own OAuth client and make it live immediately. */
+async function writeOAuthClient(
+  ctx: ToolContext,
+  clientId: string,
+  clientSecret: string,
+): Promise<void> {
+  await fsp.mkdir(path.dirname(ctx.cfg.oauthClientPath), { recursive: true });
+  await fsp.writeFile(
+    ctx.cfg.oauthClientPath,
+    JSON.stringify({ installed: { client_id: clientId, client_secret: clientSecret } }, null, 2),
+    { mode: 0o600 },
+  );
+  ctx.resetOAuthClient();
+}
+
 function setupGuidance(oauthClientPath: string): string {
   return (
     `Google sign-in is not available: this server has no Google OAuth client.\n\n` +
@@ -143,8 +159,11 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
             `  google_signin   ${
               configured
                 ? "ready. Opens Google's sign-in."
-                : "NOT set up. Needs a free Google Cloud project — only worth it\n" +
-                  "                  for a mailbox that must be provably unable to send."
+                : "needs a one-time setup of the user's own free Google project.\n" +
+                  "                  Calling gmail_connect_account with this method opens a\n" +
+                  "                  guided page that walks them through it in about two\n" +
+                  "                  minutes, then signs them in automatically. Worth it for\n" +
+                  "                  a mailbox that must be provably unable to send."
             }\n\n` +
             `Just call gmail_connect_account. Do not ask the user to type an app\n` +
             `password here — the browser page collects it locally so it never\n` +
@@ -284,20 +303,46 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
           try {
             clientConfig = await ctx.oauthClient();
           } catch {
-            return text(setupGuidance(ctx.cfg.oauthClientPath));
+            clientConfig = undefined;
           }
 
-          const flow = await beginOAuthFlow(clientConfig, tier, email_hint);
-          url = flow.authUrl;
-          pending.track(
-            url,
-            flow.completed.then((r) => register(r.email, r.token, "oauth")),
-            flow.cancel,
-          );
-          guidance =
-            `Tell them to pick the account they want and approve access. They will\n` +
-            `see an "unverified app" warning if their Cloud project is unverified —\n` +
-            `that is expected, since they are the publisher.`;
+          if (!clientConfig) {
+            // First time: walk them through creating their own Cloud project in
+            // the browser, then chain straight into the sign-in so they do not
+            // have to come back and ask again.
+            const setup = await beginCloudSetupFlow();
+            url = setup.setupUrl;
+            pending.track(
+              url,
+              setup.completed.then(async (creds) => {
+                await writeOAuthClient(ctx, creds.clientId, creds.clientSecret);
+                const flow = await beginOAuthFlow(await ctx.oauthClient(), tier, email_hint);
+                openBrowser(flow.authUrl);
+                const result = await flow.completed;
+                return register(result.email, result.token, "oauth");
+              }),
+              setup.cancel,
+            );
+            guidance =
+              `This is the one-time setup for their own free Google project, laid\n` +
+              `out step by step on the page. It takes about two minutes. When they\n` +
+              `finish it, the Google sign-in opens by itself and they just pick the\n` +
+              `account — no need to call this tool again.\n\n` +
+              `The page tells them to click PUBLISH APP on the consent screen. If\n` +
+              `they skip that, Google expires the sign-in after 7 days.`;
+          } else {
+            const flow = await beginOAuthFlow(clientConfig, tier, email_hint);
+            url = flow.authUrl;
+            pending.track(
+              url,
+              flow.completed.then((r) => register(r.email, r.token, "oauth")),
+              flow.cancel,
+            );
+            guidance =
+              `Tell them to pick the account they want and approve access. They will\n` +
+              `see an "unverified app" warning if their Cloud project is unverified —\n` +
+              `that is expected, since they are the publisher.`;
+          }
         } else {
           const flow = await beginAppPasswordFlow();
           url = flow.formUrl;
