@@ -1,11 +1,11 @@
 import crypto from "node:crypto";
 import http from "node:http";
-import { spawn } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import { gmail } from "@googleapis/gmail";
 import type { OAuth2Client } from "google-auth-library";
 import { type Tier, SCOPES_BY_TIER } from "../config.js";
 import { UserFacingError } from "../errors.js";
+import { openBrowser } from "../util/browser.js";
 import { createOAuth2Client, type OAuthClientConfig } from "./client.js";
 import type { StoredToken } from "./store.js";
 
@@ -15,23 +15,6 @@ const TIMEOUT_MS = 5 * 60 * 1000;
 export interface AuthResult {
   email: string;
   token: StoredToken;
-}
-
-function openBrowser(url: string): void {
-  // Headless servers, SSH sessions, and CI have no browser to open. The URL is
-  // always printed to stderr, so skipping the spawn loses nothing.
-  if (process.env.GMAIL_MCP_NO_BROWSER === "1") return;
-  try {
-    const [cmd, args] =
-      process.platform === "win32"
-        ? (["cmd", ["/c", "start", "", url]] as const)
-        : process.platform === "darwin"
-          ? (["open", [url]] as const)
-          : (["xdg-open", [url]] as const);
-    spawn(cmd, [...args], { detached: true, stdio: "ignore" }).unref();
-  } catch {
-    /* fall back to the printed URL */
-  }
 }
 
 function page(title: string, body: string): string {

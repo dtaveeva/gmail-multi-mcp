@@ -6,10 +6,12 @@ import { runOAuthFlow } from "../auth/flow.js";
 import { createTokenStore } from "../auth/store.js";
 import { loadConfig, TIERS, type Tier } from "../config.js";
 import { renderError, UserFacingError } from "../errors.js";
+import { runSetup } from "./setup.js";
 
 const HELP = `gmail-multi-mcp — multi-account Gmail for MCP clients
 
 USAGE
+  gmail-multi-mcp setup                  Guided first-time setup — START HERE
   gmail-multi-mcp                        Run the MCP server on stdio (default)
   gmail-multi-mcp auth add [options]     Connect a Gmail account
   gmail-multi-mcp auth list              Show connected accounts
@@ -288,6 +290,11 @@ export async function runCli(argv: string[]): Promise<number> {
           out(HELP);
           return sub ? 1 : 0;
       }
+    }
+
+    if (command === "setup") {
+      await runSetup();
+      return 0;
     }
 
     if (command === "doctor") {

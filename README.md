@@ -28,19 +28,29 @@ npm link
 
 `npm link` puts the `gmail-multi-mcp` command on your PATH, which is what the rest of this README assumes. If you would rather not link it globally, every command below also works as `node /path/to/gmail-multi-mcp/dist/src/index.js <args>`.
 
-Check where you stand:
+Then run the guided setup:
 
 ```bash
-gmail-multi-mcp doctor
+gmail-multi-mcp setup
 ```
 
-That prints your configuration state and creates nothing. You will need your own Google Cloud OAuth client before anything works — see below.
+It walks you through the whole thing — opens each Google page in the right order, tells you exactly what to click, finds the credentials file in your Downloads folder automatically, and finishes by connecting your first mailboxes. About two minutes, once.
+
+If you would rather do it by hand, the same steps are written out below.
+
+### Why do I need a Google project at all?
+
+Because Google requires it. Gmail's scopes are classified **restricted** — the most sensitive tier — and any app that offers one shared sign-in for everybody must pass a third-party security audit that recurs annually and costs real money. Tools that skip it are capped at 100 users and show a warning screen to every one of them.
+
+So each person creates their own free project. It is genuinely the only workable answer for a self-hosted tool, and it has a real upside: your mail only ever touches your own Google project. No shared server holds your tokens, and there is no third party to trust or to breach.
+
+You do this once. After that, adding a fifth mailbox is one command.
 
 ---
 
-## Setting up Google Cloud
+## Setting up Google Cloud by hand
 
-This server ships **no OAuth credentials of its own**, on purpose. Gmail's scopes are "restricted", which means a publisher offering a shared client must pass an annual third-party CASA security assessment. Any project that skips it is capped and warning-screened. Rather than route every user's mail through one unverifiable client, you bring your own — your mail only ever touches your own Cloud project.
+`gmail-multi-mcp setup` does all of this for you and is the recommended path. These are the same steps, written out, for anyone who prefers to drive the console themselves or is debugging a setup that went wrong.
 
 ### 1. Create a project and enable the API
 
