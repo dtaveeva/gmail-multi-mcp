@@ -12,6 +12,15 @@
     "llm-tools"
   ],
   "license": "MIT",
+  "author": "Vivavizion",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dtaveeva/gmail-multi-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dtaveeva/gmail-multi-mcp/issues"
+  },
+  "homepage": "https://github.com/dtaveeva/gmail-multi-mcp#readme",
   "type": "module",
   "main": "./dist/src/index.js",
   "bin": {

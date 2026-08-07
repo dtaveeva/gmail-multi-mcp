@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Open a [private security advisory](https://github.com/OWNER/gmail-multi-mcp/security/advisories/new) rather than a public issue. Please include a reproduction and the version you tested.
+Open a [private security advisory](https://github.com/dtaveeva/gmail-multi-mcp/security/advisories/new) rather than a public issue. Please include a reproduction and the version you tested.
 
 ---
 

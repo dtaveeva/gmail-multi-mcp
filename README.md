@@ -10,12 +10,26 @@ Most Gmail MCP servers connect one account and expose `send_email`. That is fine
 
 ---
 
+> **Status: 0.1.0, not yet on npm.** The safety logic and MCP protocol layer are covered by 62 tests, including an end-to-end handshake against the built server. The Google OAuth flow and live Gmail calls have not yet been exercised against a real Google project — if you are the first to try that path, please [open an issue](https://github.com/dtaveeva/gmail-multi-mcp/issues) with what you hit.
+
 ## Install
 
 Requires Node 18+.
 
 ```bash
-npx -y gmail-multi-mcp doctor
+git clone https://github.com/dtaveeva/gmail-multi-mcp.git
+cd gmail-multi-mcp
+npm install
+npm run build
+npm link
+```
+
+`npm link` puts the `gmail-multi-mcp` command on your PATH, which is what the rest of this README assumes. If you would rather not link it globally, every command below also works as `node /path/to/gmail-multi-mcp/dist/src/index.js <args>`.
+
+Check where you stand:
+
+```bash
+gmail-multi-mcp doctor
 ```
 
 That prints your configuration state and creates nothing. You will need your own Google Cloud OAuth client before anything works — see below.
@@ -61,7 +75,7 @@ If you chose **External → Testing**, add each Gmail address you plan to connec
 Confirm it landed correctly:
 
 ```bash
-npx -y gmail-multi-mcp doctor
+gmail-multi-mcp doctor
 ```
 
 ---
@@ -71,8 +85,8 @@ npx -y gmail-multi-mcp doctor
 Each account is connected separately, at whatever tier you want it to have.
 
 ```bash
-npx -y gmail-multi-mcp auth add --tier readonly --label personal
-npx -y gmail-multi-mcp auth add --tier send --label acme
+gmail-multi-mcp auth add --tier readonly --label personal
+gmail-multi-mcp auth add --tier send --label acme
 ```
 
 Your browser opens, you pick the Google account, you approve. The refresh token goes into your OS keychain (Windows Credential Manager, macOS Keychain, or libsecret); if no keychain is available it falls back to an AES-256-GCM encrypted file.
@@ -80,7 +94,7 @@ Your browser opens, you pick the Google account, you approve. The refresh token 
 Restrict who a sending account is allowed to mail — strongly recommended for any account at `send` tier:
 
 ```bash
-npx -y gmail-multi-mcp auth allow acme@yourdomain.com @acme.com @yourdomain.com
+gmail-multi-mcp auth allow acme@yourdomain.com @acme.com @yourdomain.com
 ```
 
 Now that account can only send to those two domains. Everything else is refused before it reaches Gmail.
@@ -98,24 +112,26 @@ gmail-multi-mcp doctor                             # diagnose setup problems
 
 ## Wiring it into a client
 
-**Claude Code:**
+**Claude Code** — if you ran `npm link`:
 
 ```bash
-claude mcp add gmail -- npx -y gmail-multi-mcp
+claude mcp add gmail -- gmail-multi-mcp
 ```
 
-**Claude Desktop** — add to `claude_desktop_config.json`:
+**Claude Desktop** — add to `claude_desktop_config.json`. Use the absolute path rather than the linked command name: desktop apps are launched by the OS and often do not inherit your shell's `PATH`.
 
 ```json
 {
   "mcpServers": {
     "gmail": {
-      "command": "npx",
-      "args": ["-y", "gmail-multi-mcp"]
+      "command": "node",
+      "args": ["/absolute/path/to/gmail-multi-mcp/dist/src/index.js"]
     }
   }
 }
 ```
+
+On Windows, escape the backslashes: `"C:\\Users\\you\\gmail-multi-mcp\\dist\\src\\index.js"`.
 
 Ask it to `list my gmail accounts` to confirm the connection.
 
