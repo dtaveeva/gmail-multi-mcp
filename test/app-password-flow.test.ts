@@ -90,6 +90,29 @@ describe("app password browser form", () => {
     assert.match(await res.text(), /16 characters/);
   });
 
+  it("rejects a submission carrying a foreign Origin", async () => {
+    // A malicious page cannot learn the state token — same-origin policy stops
+    // it reading the form — but rejecting the Origin outright is free.
+    const res = await fetch(new URL("/submit", flow.formUrl), {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        origin: "https://evil.example",
+      },
+      body: new URLSearchParams({ state, email: "a@b.com", password: "abcdefghijklmnop" }).toString(),
+    });
+    assert.equal(res.status, 403);
+    assert.match(await res.text(), /came from another site/);
+  });
+
+  it("sends headers that keep the page out of caches and frames", async () => {
+    const res = await fetch(flow.formUrl);
+    assert.equal(res.headers.get("cache-control"), "no-store");
+    assert.equal(res.headers.get("x-frame-options"), "DENY");
+    assert.equal(res.headers.get("referrer-policy"), "no-referrer");
+    assert.match(res.headers.get("content-security-policy") ?? "", /default-src 'none'/);
+  });
+
   it("ignores unrelated paths", async () => {
     const res = await fetch(new URL("/admin", flow.formUrl));
     assert.equal(res.status, 404);

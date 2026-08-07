@@ -58,7 +58,7 @@ function formPage(state: string, error?: string): string {
      ${error ? `<div class="err">${error}</div>` : ""}
      <ol>
        <li>Make sure 2-Step Verification is on for the account you want to connect.</li>
-       <li>Open <a href="${APP_PASSWORD_URL}" target="_blank" rel="noopener">Google app passwords</a>
+       <li>Open <a href="${APP_PASSWORD_URL}" target="_blank" rel="noopener noreferrer">Google app passwords</a>
            and generate one. Google shows it as four groups of four letters.</li>
        <li>Paste it below. The spaces do not matter.</li>
      </ol>
@@ -120,7 +120,18 @@ export async function beginAppPasswordFlow(): Promise<PendingAppPassword> {
       const url = new URL(req.url ?? "/", formUrl);
 
       const html = (status: number, body: string) =>
-        res.writeHead(status, { "content-type": "text/html; charset=utf-8" }).end(body);
+        res
+          .writeHead(status, {
+            "content-type": "text/html; charset=utf-8",
+            // The page carries a live state token and, on error, echoes back
+            // field values. Nothing about it should be cached or referred out.
+            "cache-control": "no-store",
+            "referrer-policy": "no-referrer",
+            "content-security-policy":
+              "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'",
+            "x-frame-options": "DENY",
+          })
+          .end(body);
 
       if (req.method === "GET" && url.pathname === "/") {
         html(200, formPage(state));
@@ -129,6 +140,17 @@ export async function beginAppPasswordFlow(): Promise<PendingAppPassword> {
 
       if (req.method !== "POST" || url.pathname !== "/submit") {
         res.writeHead(404).end();
+        return;
+      }
+
+      // Defence in depth against a web page posting here behind the user's
+      // back. The state token already blocks this — a cross-origin script
+      // cannot read the form to learn it — but rejecting a mismatched Origin
+      // costs nothing. Only checked when present: some clients omit it, and
+      // requiring it would break them for no gain.
+      const origin = req.headers.origin;
+      if (origin && origin !== `http://127.0.0.1:${port}`) {
+        html(403, shell("<h1>Blocked</h1><p>That request came from another site.</p>"));
         return;
       }
 
