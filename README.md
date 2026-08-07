@@ -10,20 +10,19 @@ Most Gmail MCP servers connect one account and expose `send_email`. That is fine
 
 ---
 
-> **Status: 0.1.0, not yet on npm.** 140 tests cover the safety logic, the MCP protocol layer (an end-to-end handshake against the built server), the OAuth flow, the browser setup pages, and the IMAP backend's pure logic.
+> **Status: 0.1.0.** 140 tests cover the safety logic, the MCP protocol layer (an end-to-end handshake against the built server), the OAuth flow, the browser setup pages, and the IMAP backend's pure logic.
 >
 > **Verified live on real Gmail:** connecting two accounts by in-chat Google sign-in, the OAuth token exchange, reading and searching, and two-phase sending in both directions between the accounts. The **IMAP / app-password backend's** live calls are so far exercised only by their pure-logic tests — if you connect a mailbox that way and something breaks, please [open an issue](https://github.com/dtaveeva/gmail-multi-mcp/issues) with whatever you hit.
 
 ## Quick start
 
-1. **Download and build it** (needs [Node 18+](https://nodejs.org)):
+1. **Install it** (needs [Node 18+](https://nodejs.org)):
 
    ```bash
-   git clone https://github.com/dtaveeva/gmail-multi-mcp.git
-   cd gmail-multi-mcp
-   npm install
-   npm run build
+   npm install -g gmail-multi-mcp
    ```
+
+   Or from source: `git clone https://github.com/dtaveeva/gmail-multi-mcp.git && cd gmail-multi-mcp && npm install && npm run build`.
 
 2. **Wire it into your AI assistant** — one line for Claude Code, or a small config block for Claude Desktop. See [Wiring it into a client](#wiring-it-into-a-client).
 
@@ -43,6 +42,16 @@ Most Gmail MCP servers connect one account and expose `send_email`. That is fine
 
 Requires Node 18+.
 
+**From npm (recommended):**
+
+```bash
+npm install -g gmail-multi-mcp
+```
+
+This puts the `gmail-multi-mcp` command on your PATH, which the rest of this README assumes.
+
+**From source:**
+
 ```bash
 git clone https://github.com/dtaveeva/gmail-multi-mcp.git
 cd gmail-multi-mcp
@@ -51,7 +60,7 @@ npm run build
 npm link
 ```
 
-`npm link` puts the `gmail-multi-mcp` command on your PATH, which is what the rest of this README assumes. If you would rather not link it globally, every command below also works as `node /path/to/gmail-multi-mcp/dist/src/index.js <args>`.
+`npm link` puts the `gmail-multi-mcp` command on your PATH. If you would rather not link it globally, every command below also works as `node /path/to/gmail-multi-mcp/dist/src/index.js <args>`.
 
 Then run the guided setup:
 
@@ -205,7 +214,7 @@ That is a project instruction, not something this server enforces. The controls 
 
 ## Wiring it into a client
 
-**Claude Code** — if you ran `npm link`:
+**Claude Code** — with `gmail-multi-mcp` on your PATH (from the global npm install, or `npm link`):
 
 ```bash
 claude mcp add gmail -- gmail-multi-mcp
