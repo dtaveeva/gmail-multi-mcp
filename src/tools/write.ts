@@ -10,6 +10,26 @@ import {
 } from "../safety/permissions.js";
 import { guarded, resolve, text, type ToolContext, type ToolResult } from "./context.js";
 
+/**
+ * Banner placed at the top of a send preview, before any token exists.
+ *
+ * The sending account is the single easiest thing to get wrong in a
+ * multi-account setup: an assistant picks a plausible mailbox the user never
+ * named. The two-phase token binds the account — changing it between preview
+ * and send invalidates the token — but binding is not the same as *checking*.
+ * It stops a swap after the preview; it does nothing about a wrong choice made
+ * before it. So the preview states the sender out loud and asks for it to be
+ * confirmed whenever the user did not choose it themselves.
+ */
+export function senderConfirmationBanner(email: string): string {
+  return (
+    `SENDING ACCOUNT — confirm before you send\n` +
+    `  This message will be sent FROM: ${email}\n` +
+    `  If the user did not explicitly choose this account, confirm with them\n` +
+    `  that it is the right one to send from before redeeming the token.\n\n`
+  );
+}
+
 /** Renders the phase-1 response: what will happen, and how to authorise it. */
 function previewResponse(
   ctx: ToolContext,
@@ -109,7 +129,9 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext): void {
       description:
         "Send mail from a connected account. Call WITHOUT confirm_token first to get " +
         "a preview and a token; call again with identical arguments plus the token to " +
-        "actually send. Never invent a token — one you did not receive will be rejected.",
+        "actually send. Never invent a token — one you did not receive will be rejected. " +
+        "If the user did not say which account to send from, confirm the sending account " +
+        "with them before sending — the preview restates it for exactly that check.",
       inputSchema: {
         account: z.string(),
         to: z.array(z.string()).min(1),
@@ -169,7 +191,12 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext): void {
               outcome: "ok",
               detail: { to, cc, bcc, subject, body: AuditLog.digest(body) },
             });
-            return previewResponse(ctx, "gmail_send", previewText(msg), issued);
+            return previewResponse(
+              ctx,
+              "gmail_send",
+              senderConfirmationBanner(acct.email) + previewText(msg),
+              issued,
+            );
           }
 
           ctx.confirmations.redeem(confirm_token, "gmail_send", acct.email, payload);
@@ -241,7 +268,12 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext): void {
               outcome: "ok",
               detail: { draftId: draft_id, to: parsed.to, subject: parsed.subject },
             });
-            return previewResponse(ctx, "gmail_send_draft", summary, issued);
+            return previewResponse(
+              ctx,
+              "gmail_send_draft",
+              senderConfirmationBanner(acct.email) + summary,
+              issued,
+            );
           }
 
           ctx.confirmations.redeem(confirm_token, "gmail_send_draft", acct.email, { draft_id });

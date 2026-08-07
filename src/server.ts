@@ -74,6 +74,10 @@ export async function runServer(): Promise<void> {
         "- Sending, labelling, and trashing are two-phase: call once to preview, " +
         "then again with the returned confirm_token. Tokens are bound to the exact " +
         "arguments previewed; never fabricate one.\n" +
+        "- Confirm the sending account before you send. If the user did not say which " +
+        "account to send from, ask them which connected account to use before the first " +
+        "gmail_send preview. The preview restates the sender; do not redeem the token " +
+        "until the user has confirmed both the sending account and the recipients.\n" +
         "- Accounts carry tiers (readonly / draft / send). A refusal means the " +
         "account is not connected at a high enough tier, which only the user can change.",
     },
