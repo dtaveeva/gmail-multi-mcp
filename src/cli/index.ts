@@ -21,6 +21,11 @@ USAGE
 AUTH ADD OPTIONS
   --tier <readonly|draft|send>   Permission level (default: readonly)
   --label <name>                 Short handle, e.g. "work"
+  --email <address>              Pre-select this account in Google's chooser
+
+  Run auth add once per mailbox. Google always shows its account chooser, so
+  you can sign into a different account each time — including one your browser
+  is not currently signed into.
 
 TIERS
   readonly   Read and search only. Enforced by Google — the granted scope
@@ -73,12 +78,32 @@ async function authAdd(args: string[]): Promise<void> {
     createTokenStore(cfg),
   ]);
 
-  const { email, token } = await runOAuthFlow(clientConfig, tier);
-  await store.set(email, token);
-  await registry.upsert({ email, tier, ...(label ? { label } : {}) });
+  const { email, token } = await runOAuthFlow(clientConfig, tier, flag(args, "email"));
 
-  out(`\nConnected ${email} at tier "${tier}".`);
+  // Captured before upsert so we can tell the user which of the two happened.
+  // Silently "adding" an account that was already connected is how someone
+  // ends up thinking a second mailbox failed to connect.
+  const previous = registry.find(email);
+
+  await store.set(email, token);
+  await registry.upsert({
+    email,
+    tier,
+    ...(label ? { label } : previous?.label ? { label: previous.label } : {}),
+    ...(previous?.allowedRecipients ? { allowedRecipients: previous.allowedRecipients } : {}),
+  });
+
+  if (previous) {
+    out(`\nRe-authorised ${email} (was tier "${previous.tier}", now "${tier}").`);
+    out(`This account was already connected — nothing new was added.`);
+    if (previous.allowedRecipients?.length) {
+      out(`Its recipient allowlist was kept: ${previous.allowedRecipients.join(", ")}`);
+    }
+  } else {
+    out(`\nConnected ${email} at tier "${tier}".`);
+  }
   out(`Tokens stored via: ${store.backend}`);
+  out(`Accounts now connected: ${registry.list().length}`);
   if (tier === "send") {
     out(
       `\nThis account can send mail. Consider restricting recipients:\n` +
@@ -126,7 +151,9 @@ async function authTier(args: string[]): Promise<void> {
 
   const clientConfig = await loadOAuthClientConfig(cfg);
   const store = await createTokenStore(cfg);
-  const result = await runOAuthFlow(clientConfig, tier);
+  // Pre-select the account being changed, so the chooser does not invite the
+  // user to pick the wrong one.
+  const result = await runOAuthFlow(clientConfig, tier, account.email);
 
   if (result.email.toLowerCase() !== account.email.toLowerCase()) {
     throw new UserFacingError(

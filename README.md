@@ -110,6 +110,37 @@ gmail-multi-mcp auth remove personal@gmail.com     # disconnect and erase the to
 gmail-multi-mcp doctor                             # diagnose setup problems
 ```
 
+### Connecting a second, third, fifth account
+
+Run `auth add` once per mailbox. Google's account chooser is always shown, so each run can target a different account — including one your browser is not currently signed into. You never need to sign out of anything.
+
+```bash
+gmail-multi-mcp auth add --tier readonly --label personal
+gmail-multi-mcp auth add --tier send --label acme
+gmail-multi-mcp auth add --tier draft --label agency --email me@agency.com
+```
+
+`--email` pre-selects an account in the chooser, which saves a click when you know exactly which one you want.
+
+Re-running `auth add` for an account that is already connected **re-authorises** it rather than adding a duplicate — that is how you change a tier — and it tells you that is what happened. Its label and recipient allowlist are preserved.
+
+### Does it remember accounts between conversations?
+
+Yes, with one distinction worth understanding.
+
+**The connections persist.** The account registry lives in `~/.gmail-multi-mcp/accounts.json` and refresh tokens live in your OS keychain. Both are on disk and have nothing to do with any conversation. Every new chat spawns a fresh server process that reads them at startup, so all your mailboxes are available immediately with no re-authorisation. There are tests asserting exactly this across independent processes.
+
+**The assistant's habits do not.** A new conversation starts with no memory of "use `acme` for client work". What survives is the *labels* — any session can call `gmail_list_accounts` and discover `personal`, `acme`, and `agency`, along with each one's tier and allowlist. So choose labels that mean something; they are the durable naming.
+
+If you want an assistant to reach for the right mailbox without being told every time, write it where that assistant reads persistent context. For Claude Code, a line in `CLAUDE.md`:
+
+```markdown
+Gmail: use the `acme` account for Acme client mail, `personal` for everything else.
+Never send from `personal` without asking me first.
+```
+
+That is a project instruction, not something this server enforces. The controls that actually bind are tiers and allowlists — if `personal` should never send, connect it `readonly` and the question cannot arise.
+
 ---
 
 ## Wiring it into a client

@@ -33,7 +33,7 @@ interface Started {
 }
 
 /** Start a flow and capture the authorization URL it writes to stderr. */
-async function startFlow(tier: Tier): Promise<Started> {
+async function startFlow(tier: Tier, loginHint?: string): Promise<Started> {
   process.env.GMAIL_MCP_NO_BROWSER = "1";
 
   const captured: string[] = [];
@@ -43,7 +43,7 @@ async function startFlow(tier: Tier): Promise<Started> {
     return true;
   }) as typeof process.stderr.write;
 
-  const settled = runOAuthFlow(FAKE_CLIENT, tier).then(
+  const settled = runOAuthFlow(FAKE_CLIENT, tier, loginHint).then(
     () => ({ ok: true }),
     (err: unknown) => ({ ok: false, error: err instanceof Error ? err.message : String(err) }),
   );
@@ -82,14 +82,34 @@ describe("OAuth authorization URL", () => {
     await settled;
   });
 
-  it("requests offline access and forces the consent screen", async () => {
+  it("requests offline access and forces both the chooser and consent", async () => {
     const { settled, url } = await startFlow("readonly");
 
-    // Without both of these Google omits refresh_token on re-authorization and
-    // the account silently dies when the access token expires an hour later.
+    // offline+consent: without both, Google omits refresh_token on
+    // re-authorization and the account dies when the access token expires.
     assert.equal(url.searchParams.get("access_type"), "offline");
-    assert.equal(url.searchParams.get("prompt"), "consent");
 
+    // select_account: without it, a user already signed into one Google
+    // account gets sent straight to consent for that account, so connecting a
+    // second mailbox would silently re-authorize the first.
+    const prompt = (url.searchParams.get("prompt") ?? "").split(" ");
+    assert.ok(prompt.includes("consent"), "prompt must include consent");
+    assert.ok(prompt.includes("select_account"), "prompt must include select_account");
+
+    await fetch(callbackUrl(url, { state: "wrong" })).catch(() => {});
+    await settled;
+  });
+
+  it("omits login_hint unless one is supplied", async () => {
+    const { settled, url } = await startFlow("readonly");
+    assert.equal(url.searchParams.get("login_hint"), null);
+    await fetch(callbackUrl(url, { state: "wrong" })).catch(() => {});
+    await settled;
+  });
+
+  it("passes login_hint through so a specific account is pre-selected", async () => {
+    const { settled, url } = await startFlow("readonly", "someone@example.com");
+    assert.equal(url.searchParams.get("login_hint"), "someone@example.com");
     await fetch(callbackUrl(url, { state: "wrong" })).catch(() => {});
     await settled;
   });

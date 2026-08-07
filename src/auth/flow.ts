@@ -50,10 +50,15 @@ function page(title: string, body: string): string {
  * - `prompt=consent` is required: without it Google omits refresh_token on
  *   re-authorization, and the account silently stops working when the access
  *   token expires an hour later.
+ * - `select_account` is required alongside it. This is a multi-account tool,
+ *   and with `consent` alone Google sends a user who is already signed in
+ *   straight to the consent screen for *that* account. Connecting a second
+ *   mailbox would then silently re-authorize the first one.
  */
 export async function runOAuthFlow(
   clientConfig: OAuthClientConfig,
   tier: Tier,
+  loginHint?: string,
 ): Promise<AuthResult> {
   const scopes = [...SCOPES_BY_TIER[tier]];
   const state = crypto.randomBytes(24).toString("base64url");
@@ -71,11 +76,12 @@ export async function runOAuthFlow(
 
   const authUrl = oauth.generateAuthUrl({
     access_type: "offline",
-    prompt: "consent",
+    prompt: "select_account consent",
     scope: scopes,
     state,
     code_challenge_method: "S256" as never,
     code_challenge: codeChallenge,
+    ...(loginHint ? { login_hint: loginHint } : {}),
   });
 
   const code = await new Promise<string>((resolve, reject) => {
