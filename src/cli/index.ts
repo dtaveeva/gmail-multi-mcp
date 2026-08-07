@@ -2,6 +2,8 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline/promises";
 import { AccountRegistry } from "../auth/accounts.js";
+import { GmailClientFactory } from "../gmail/client.js";
+import { MailboxFactory } from "../mailbox/index.js";
 import { normaliseAppPassword, verifyAppPassword } from "../mailbox/imap.js";
 import { openBrowser } from "../util/browser.js";
 import { promptSecret } from "../util/prompt.js";
@@ -23,6 +25,7 @@ USAGE
   gmail-multi-mcp auth tier <email> <t>  Change an account's tier (re-authorises)
   gmail-multi-mcp auth allow <email> ... Set a send allowlist for an account
   gmail-multi-mcp auth remove <email>    Disconnect an account and erase its token
+  gmail-multi-mcp verify <email>         Read-only live check of one account
   gmail-multi-mcp doctor                 Diagnose configuration problems
 
 AUTH ADD OPTIONS
@@ -316,6 +319,86 @@ async function authRemove(args: string[]): Promise<void> {
   );
 }
 
+/**
+ * Read-only live check against a connected account.
+ *
+ * Deliberately minimal about what it prints: counts, and the subject line of
+ * the single newest message. Enough to prove the connection, the search path,
+ * and the fetch path all work end to end, without spilling a mailbox into a
+ * terminal or a transcript.
+ */
+async function verify(args: string[]): Promise<void> {
+  const ref = args[0];
+  if (!ref) {
+    throw new UserFacingError(
+      "Usage: gmail-multi-mcp verify <email-or-label>",
+      "Run `gmail-multi-mcp auth list` to see what is connected.",
+    );
+  }
+
+  const cfg = loadConfig();
+  const [registry, store] = await Promise.all([
+    AccountRegistry.load(cfg),
+    createTokenStore(cfg),
+  ]);
+  const account = registry.require(ref);
+
+  let clientConfigPromise: ReturnType<typeof loadOAuthClientConfig> | undefined;
+  const mailboxes = new MailboxFactory(
+    new GmailClientFactory(
+      () => (clientConfigPromise ??= loadOAuthClientConfig(cfg)),
+      store,
+    ),
+    store,
+  );
+
+  out();
+  out(`Verifying ${account.email}`);
+  out(`  tier:    ${account.tier}`);
+  out(`  auth:    ${account.auth ?? "oauth"}`);
+  out();
+
+  try {
+    const mailbox = await mailboxes.forAccount(account);
+    out(`  backend: ${mailbox.backend}`);
+
+    out("  connecting and listing labels…");
+    const labels = await mailbox.listLabels();
+    out(`  OK — ${labels.length} labels/folders visible`);
+
+    out("  searching for the newest inbox message…");
+    const found = await mailbox.search({
+      query: "in:inbox",
+      maxResults: 1,
+      includeBody: false,
+    });
+
+    if (!found.length) {
+      out("  OK — search worked; the inbox is empty.");
+    } else {
+      const m = found[0]!;
+      out(`  OK — newest message:`);
+      out(`       subject: ${m.subject}`);
+      out(`       date:    ${m.date}`);
+      out(`       id:      ${m.id}`);
+
+      out("  fetching that message by id…");
+      const full = await mailbox.getMessage(m.id);
+      out(`  OK — fetched ${full.body.length} characters of body text`);
+    }
+
+    out();
+    out("  Read path works end to end. Nothing was sent, changed, or deleted.");
+    if ((account.auth ?? "oauth") === "app-password") {
+      out();
+      out("  Reminder: this account uses an app password, so its tier is");
+      out("  enforced by this program rather than by Google.");
+    }
+  } finally {
+    await mailboxes.disposeAll();
+  }
+}
+
 async function doctor(): Promise<void> {
   const cfg = loadConfig();
   out(`gmail-multi-mcp doctor\n`);
@@ -393,6 +476,11 @@ export async function runCli(argv: string[]): Promise<number> {
 
     if (command === "setup") {
       await runSetup();
+      return 0;
+    }
+
+    if (command === "verify") {
+      await verify([sub, ...rest].filter((a): a is string => !!a));
       return 0;
     }
 
