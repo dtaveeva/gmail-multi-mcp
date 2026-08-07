@@ -12,11 +12,27 @@ export interface StoredToken {
   scope?: string;
 }
 
+export interface StoredAppPassword {
+  app_password: string;
+}
+
+/**
+ * What is held for an account. The discriminant is structural: OAuth records
+ * carry a refresh_token, app-password records carry an app_password. Records
+ * written before app passwords existed have no marker and are OAuth by
+ * construction, so no migration is needed.
+ */
+export type StoredCredential = StoredToken | StoredAppPassword;
+
+export function isAppPassword(cred: StoredCredential): cred is StoredAppPassword {
+  return typeof (cred as StoredAppPassword).app_password === "string";
+}
+
 export interface TokenStore {
   /** Human-readable name of the backend actually in use, for `doctor` output. */
   readonly backend: string;
-  get(email: string): Promise<StoredToken | null>;
-  set(email: string, token: StoredToken): Promise<void>;
+  get(email: string): Promise<StoredCredential | null>;
+  set(email: string, token: StoredCredential): Promise<void>;
   delete(email: string): Promise<void>;
 }
 
@@ -59,16 +75,16 @@ class KeychainStore implements TokenStore {
 
   constructor(private readonly Entry: KeyringCtor) {}
 
-  async get(email: string): Promise<StoredToken | null> {
+  async get(email: string): Promise<StoredCredential | null> {
     try {
       const raw = new this.Entry(SERVICE, email).getPassword();
-      return raw ? (JSON.parse(raw) as StoredToken) : null;
+      return raw ? (JSON.parse(raw) as StoredCredential) : null;
     } catch {
       return null;
     }
   }
 
-  async set(email: string, token: StoredToken): Promise<void> {
+  async set(email: string, token: StoredCredential): Promise<void> {
     new this.Entry(SERVICE, email).setPassword(JSON.stringify(token));
   }
 
@@ -124,7 +140,7 @@ class EncryptedFileStore implements TokenStore {
     }
   }
 
-  private async readAll(): Promise<Record<string, StoredToken>> {
+  private async readAll(): Promise<Record<string, StoredCredential>> {
     let raw: string;
     try {
       raw = await fs.readFile(this.filePath, "utf8");
@@ -147,10 +163,10 @@ class EncryptedFileStore implements TokenStore {
       decipher.update(Buffer.from(env.data, "base64")),
       decipher.final(),
     ]).toString("utf8");
-    return JSON.parse(plain) as Record<string, StoredToken>;
+    return JSON.parse(plain) as Record<string, StoredCredential>;
   }
 
-  private async writeAll(all: Record<string, StoredToken>): Promise<void> {
+  private async writeAll(all: Record<string, StoredCredential>): Promise<void> {
     const salt = crypto.randomBytes(16);
     const iv = crypto.randomBytes(12);
     const key = crypto.scryptSync(await this.secret(), salt, 32);
@@ -170,11 +186,11 @@ class EncryptedFileStore implements TokenStore {
     await fs.writeFile(this.filePath, JSON.stringify(env), { mode: 0o600 });
   }
 
-  async get(email: string): Promise<StoredToken | null> {
+  async get(email: string): Promise<StoredCredential | null> {
     return (await this.readAll())[email] ?? null;
   }
 
-  async set(email: string, token: StoredToken): Promise<void> {
+  async set(email: string, token: StoredCredential): Promise<void> {
     const all = await this.readAll();
     all[email] = token;
     await this.writeAll(all);

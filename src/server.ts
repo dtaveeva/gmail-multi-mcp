@@ -5,6 +5,7 @@ import { loadOAuthClientConfig } from "./auth/client.js";
 import { createTokenStore } from "./auth/store.js";
 import { loadConfig } from "./config.js";
 import { GmailClientFactory } from "./gmail/client.js";
+import { MailboxFactory } from "./mailbox/index.js";
 import { AuditLog } from "./safety/audit.js";
 import { ConfirmationStore } from "./safety/confirm.js";
 import { RateLimiter } from "./safety/ratelimit.js";
@@ -28,7 +29,10 @@ export async function buildContext(): Promise<ToolContext> {
   return {
     cfg,
     registry,
-    clients: new GmailClientFactory(clientConfigProvider, store),
+    mailboxes: new MailboxFactory(
+      new GmailClientFactory(clientConfigProvider, store),
+      store,
+    ),
     confirmations: new ConfirmationStore(cfg.confirmTtlMs, cfg.confirmMode),
     limiter: new RateLimiter({
       send: cfg.maxSendsPerHour,
@@ -85,6 +89,14 @@ export async function runServer(): Promise<void> {
         `run \`gmail-multi-mcp doctor\` for details.\n`,
     );
   }
+
+  // IMAP holds a live socket, unlike the stateless REST client, so connections
+  // must be closed on the way out or Gmail is left with dangling sessions.
+  const shutdown = () => {
+    void ctx.mailboxes.disposeAll().finally(() => process.exit(0));
+  };
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
 
   await server.connect(new StdioServerTransport());
 }

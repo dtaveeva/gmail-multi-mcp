@@ -3,9 +3,21 @@ import path from "node:path";
 import { type Config, type Tier, SCOPES_BY_TIER } from "../config.js";
 import { UserFacingError } from "../errors.js";
 
+/**
+ * How this account is reached.
+ *
+ * `oauth` grants scoped access, so a readonly account is enforced by Google.
+ * `app-password` is a single all-or-nothing credential over IMAP/SMTP — far
+ * simpler to set up, but incapable of expressing "read only", which makes the
+ * readonly tier a check in this server's code instead of a provider guarantee.
+ */
+export type AuthMethod = "oauth" | "app-password";
+
 export interface Account {
   email: string;
   tier: Tier;
+  /** Absent on records written before app passwords existed; those are OAuth. */
+  auth?: AuthMethod;
   /** Short handle the model can use instead of the full address, e.g. "work". */
   label?: string;
   /**
@@ -70,10 +82,14 @@ export class AccountRegistry {
 
   async upsert(account: Omit<Account, "addedAt" | "scopes"> & { addedAt?: string }): Promise<Account> {
     const existing = this.find(account.email);
+    const auth: AuthMethod = account.auth ?? "oauth";
     const record: Account = {
       ...existing,
       ...account,
-      scopes: [...SCOPES_BY_TIER[account.tier]],
+      auth,
+      // App passwords carry no scopes; recording the OAuth scope list for one
+      // would imply a restriction Google is not actually enforcing.
+      scopes: auth === "oauth" ? [...SCOPES_BY_TIER[account.tier]] : [],
       addedAt: existing?.addedAt ?? account.addedAt ?? new Date().toISOString(),
     };
     this.registry.accounts = [

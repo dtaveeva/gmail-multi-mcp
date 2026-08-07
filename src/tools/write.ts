@@ -1,8 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { UserFacingError } from "../errors.js";
-import { previewText, toGmailRaw, type OutgoingMessage } from "../gmail/mime.js";
-import { parseMessage } from "../gmail/parse.js";
+import { previewText, type OutgoingMessage } from "../gmail/mime.js";
 import { AuditLog } from "../safety/audit.js";
 import {
   assertCapability,
@@ -61,13 +60,13 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext): void {
     },
     async ({ account, to, subject, body, cc, reply_to_message_id }) =>
       guarded(ctx, "gmail_create_draft", "execute", () => account, async () => {
-        const { account: acct, gmail } = await resolve(ctx, account);
+        const { account: acct, mailbox } = await resolve(ctx, account);
         assertCapability(acct, "draft", ctx.cfg);
         assertRecipientsAllowed(acct, [...to, ...(cc ?? [])].flatMap(parseAddresses));
         ctx.limiter.consume(acct.email, "mutation");
 
         const threading = reply_to_message_id
-          ? await threadingHeaders(gmail, reply_to_message_id)
+          ? await mailbox.threadingFor(reply_to_message_id)
           : undefined;
 
         const msg: OutgoingMessage = {
@@ -92,18 +91,10 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext): void {
           return text(`DRY RUN — draft not created.\n\n${previewText(msg)}`);
         }
 
-        const res = await gmail.users.drafts.create({
-          userId: "me",
-          requestBody: {
-            message: {
-              raw: toGmailRaw(msg),
-              ...(threading?.threadId ? { threadId: threading.threadId } : {}),
-            },
-          },
-        });
+        const draftId = await mailbox.createDraft(msg, threading);
 
         return text(
-          `Draft saved in ${acct.email}.\n  draft id: ${res.data.id}\n\n${previewText(msg)}`,
+          `Draft saved in ${acct.email}.\n  draft id: ${draftId}\n\n${previewText(msg)}`,
         );
       }),
   );
@@ -141,7 +132,7 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext): void {
         confirm_token ? "execute" : "preview",
         () => account,
         async () => {
-          const { account: acct, gmail } = await resolve(ctx, account);
+          const { account: acct, mailbox } = await resolve(ctx, account);
           assertCapability(acct, "send", ctx.cfg);
 
           const recipients = [...to, ...(cc ?? []), ...(bcc ?? [])].flatMap(parseAddresses);
@@ -151,7 +142,7 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext): void {
           assertRecipientsAllowed(acct, recipients);
 
           const threading = reply_to_message_id
-            ? await threadingHeaders(gmail, reply_to_message_id)
+            ? await mailbox.threadingFor(reply_to_message_id)
             : undefined;
 
           const msg: OutgoingMessage = {
@@ -197,16 +188,10 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext): void {
             return text(`DRY RUN — nothing was sent.\n\n${previewText(msg)}`);
           }
 
-          const res = await gmail.users.messages.send({
-            userId: "me",
-            requestBody: {
-              raw: toGmailRaw(msg),
-              ...(threading?.threadId ? { threadId: threading.threadId } : {}),
-            },
-          });
+          const sentId = await mailbox.send(msg, threading);
 
           return text(
-            `Sent from ${acct.email}.\n  message id: ${res.data.id}\n` +
+            `Sent from ${acct.email}.\n  message id: ${sentId}\n` +
               `  remaining sends this hour: ${ctx.limiter.remaining(acct.email, "send")}\n\n` +
               previewText(msg),
           );
@@ -235,17 +220,10 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext): void {
         confirm_token ? "execute" : "preview",
         () => account,
         async () => {
-          const { account: acct, gmail } = await resolve(ctx, account);
+          const { account: acct, mailbox } = await resolve(ctx, account);
           assertCapability(acct, "send", ctx.cfg);
 
-          const draft = await gmail.users.drafts.get({
-            userId: "me",
-            id: draft_id,
-            format: "full",
-          });
-          const parsed = draft.data.message ? parseMessage(draft.data.message) : undefined;
-          if (!parsed) throw new UserFacingError(`Draft ${draft_id} has no message content.`);
-
+          const parsed = await mailbox.getDraft(draft_id);
           assertRecipientsAllowed(acct, parseAddresses(`${parsed.to} ${parsed.cc}`));
 
           const summary =
@@ -280,11 +258,8 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext): void {
 
           if (ctx.cfg.dryRun) return text(`DRY RUN — draft not sent.\n\n${summary}`);
 
-          const res = await gmail.users.drafts.send({
-            userId: "me",
-            requestBody: { id: draft_id },
-          });
-          return text(`Draft sent from ${acct.email}.\n  message id: ${res.data.id}\n\n${summary}`);
+          const sentId = await mailbox.sendDraft(draft_id);
+          return text(`Draft sent from ${acct.email}.\n  message id: ${sentId}\n\n${summary}`);
         },
       ),
   );
@@ -316,7 +291,7 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext): void {
         confirm_token ? "execute" : "preview",
         () => account,
         async () => {
-          const { account: acct, gmail } = await resolve(ctx, account);
+          const { account: acct, mailbox } = await resolve(ctx, account);
           assertCapability(acct, "modify", ctx.cfg);
 
           if (!add_label_ids?.length && !remove_label_ids?.length) {
@@ -353,14 +328,7 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext): void {
 
           if (ctx.cfg.dryRun) return text(`DRY RUN — no labels changed.\n\n${summary}`);
 
-          await gmail.users.messages.batchModify({
-            userId: "me",
-            requestBody: {
-              ids: message_ids,
-              ...(add_label_ids?.length ? { addLabelIds: add_label_ids } : {}),
-              ...(remove_label_ids?.length ? { removeLabelIds: remove_label_ids } : {}),
-            },
-          });
+          await mailbox.modifyLabels(message_ids, add_label_ids ?? [], remove_label_ids ?? []);
 
           return text(`Updated labels on ${message_ids.length} message(s) in ${acct.email}.`);
         },
@@ -388,7 +356,7 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext): void {
         confirm_token ? "execute" : "preview",
         () => account,
         async () => {
-          const { account: acct, gmail } = await resolve(ctx, account);
+          const { account: acct, mailbox } = await resolve(ctx, account);
           assertCapability(acct, "modify", ctx.cfg);
 
           const payload = { message_ids };
@@ -417,35 +385,10 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext): void {
 
           if (ctx.cfg.dryRun) return text(`DRY RUN — nothing was trashed.\n\n${summary}`);
 
-          for (const id of message_ids) {
-            await gmail.users.messages.trash({ userId: "me", id });
-          }
+          await mailbox.trash(message_ids);
           return text(`Moved ${message_ids.length} message(s) to Trash in ${acct.email}.`);
         },
       ),
   );
 }
 
-/** Fetch Message-ID / References so a reply threads correctly in Gmail. */
-async function threadingHeaders(
-  gmail: Awaited<ReturnType<typeof resolve>>["gmail"],
-  messageId: string,
-): Promise<{ messageId: string; references: string; threadId: string }> {
-  const res = await gmail.users.messages.get({
-    userId: "me",
-    id: messageId,
-    format: "metadata",
-    metadataHeaders: ["Message-ID", "References"],
-  });
-  const parsed = parseMessage(res.data);
-  const original = parsed.headers["message-id"];
-  if (!original) {
-    throw new UserFacingError(`Message ${messageId} has no Message-ID; cannot thread a reply.`);
-  }
-  const priorRefs = parsed.headers["references"];
-  return {
-    messageId: original,
-    references: priorRefs ? `${priorRefs} ${original}` : original,
-    threadId: parsed.threadId,
-  };
-}

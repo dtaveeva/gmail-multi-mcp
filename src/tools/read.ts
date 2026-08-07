@@ -3,7 +3,6 @@ import { z } from "zod";
 import { effectiveTier } from "../safety/permissions.js";
 import { assertCapability } from "../safety/permissions.js";
 import { clamp, contain } from "../safety/untrusted.js";
-import { parseMessage } from "../gmail/parse.js";
 import { guarded, resolve, text, type ToolContext } from "./context.js";
 
 export function registerReadTools(server: McpServer, ctx: ToolContext): void {
@@ -31,6 +30,7 @@ export function registerReadTools(server: McpServer, ctx: ToolContext): void {
 
         const lines = accounts.map((a) => {
           const tier = effectiveTier(a, ctx.cfg);
+          const auth = a.auth ?? "oauth";
           const forced = tier !== a.tier ? ` (forced from "${a.tier}" by GMAIL_MCP_READONLY)` : "";
           const allow = a.allowedRecipients?.length
             ? `\n    recipient allowlist: ${a.allowedRecipients.join(", ")}`
@@ -40,7 +40,18 @@ export function registerReadTools(server: McpServer, ctx: ToolContext): void {
               ? `\n    quota left this hour: ${ctx.limiter.remaining(a.email, "send")} sends, ` +
                 `${ctx.limiter.remaining(a.email, "mutation")} other changes`
               : "";
-          return `  ${a.email}${a.label ? `  [${a.label}]` : ""}\n    tier: ${tier}${forced}${allow}${quota}`;
+          // The strength of the tier differs by auth method, and the model should
+          // not report a readonly app-password account as provider-enforced.
+          const enforcement =
+            auth === "app-password"
+              ? `\n    access: app password (IMAP). Tier is enforced by this server only.`
+              : tier === "readonly"
+                ? `\n    access: OAuth. Read-only is enforced by Google; writes are impossible.`
+                : `\n    access: OAuth (scoped)`;
+          return (
+            `  ${a.email}${a.label ? `  [${a.label}]` : ""}` +
+            `\n    tier: ${tier}${forced}${enforcement}${allow}${quota}`
+          );
         });
 
         const mode =
@@ -76,15 +87,14 @@ export function registerReadTools(server: McpServer, ctx: ToolContext): void {
     },
     async ({ account, query, max_results, include_body }) =>
       guarded(ctx, "gmail_search", "read", () => account, async () => {
-        const { account: acct, gmail } = await resolve(ctx, account);
+        const { account: acct, mailbox } = await resolve(ctx, account);
         assertCapability(acct, "read", ctx.cfg);
 
-        const list = await gmail.users.messages.list({
-          userId: "me",
-          q: query,
+        const messages = await mailbox.search({
+          query,
           maxResults: max_results,
+          includeBody: include_body,
         });
-        const ids = (list.data.messages ?? []).map((m) => m.id).filter((id): id is string => !!id);
 
         await ctx.audit.record({
           ts: new Date().toISOString(),
@@ -92,24 +102,10 @@ export function registerReadTools(server: McpServer, ctx: ToolContext): void {
           account: acct.email,
           phase: "read",
           outcome: "ok",
-          detail: { query, returned: ids.length },
+          detail: { query, returned: messages.length, backend: mailbox.backend },
         });
 
-        if (!ids.length) return text(`No messages in ${acct.email} matched: ${query}`);
-
-        const messages = await Promise.all(
-          ids.map(async (id) => {
-            const res = await gmail.users.messages.get({
-              userId: "me",
-              id,
-              format: include_body ? "full" : "metadata",
-              ...(include_body
-                ? {}
-                : { metadataHeaders: ["From", "To", "Subject", "Date"] }),
-            });
-            return parseMessage(res.data);
-          }),
-        );
+        if (!messages.length) return text(`No messages in ${acct.email} matched: ${query}`);
 
         const rendered = messages
           .map((m, i) => {
@@ -144,15 +140,10 @@ export function registerReadTools(server: McpServer, ctx: ToolContext): void {
     },
     async ({ account, message_id }) =>
       guarded(ctx, "gmail_read_message", "read", () => account, async () => {
-        const { account: acct, gmail } = await resolve(ctx, account);
+        const { account: acct, mailbox } = await resolve(ctx, account);
         assertCapability(acct, "read", ctx.cfg);
 
-        const res = await gmail.users.messages.get({
-          userId: "me",
-          id: message_id,
-          format: "full",
-        });
-        const m = parseMessage(res.data);
+        const m = await mailbox.getMessage(message_id);
 
         await ctx.audit.record({
           ts: new Date().toISOString(),
@@ -192,15 +183,10 @@ export function registerReadTools(server: McpServer, ctx: ToolContext): void {
     },
     async ({ account, thread_id }) =>
       guarded(ctx, "gmail_read_thread", "read", () => account, async () => {
-        const { account: acct, gmail } = await resolve(ctx, account);
+        const { account: acct, mailbox } = await resolve(ctx, account);
         assertCapability(acct, "read", ctx.cfg);
 
-        const res = await gmail.users.threads.get({
-          userId: "me",
-          id: thread_id,
-          format: "full",
-        });
-        const messages = (res.data.messages ?? []).map(parseMessage);
+        const messages = await mailbox.getThread(thread_id);
 
         await ctx.audit.record({
           ts: new Date().toISOString(),
@@ -237,12 +223,11 @@ export function registerReadTools(server: McpServer, ctx: ToolContext): void {
     },
     async ({ account }) =>
       guarded(ctx, "gmail_list_labels", "read", () => account, async () => {
-        const { account: acct, gmail } = await resolve(ctx, account);
+        const { account: acct, mailbox } = await resolve(ctx, account);
         assertCapability(acct, "read", ctx.cfg);
 
-        const res = await gmail.users.labels.list({ userId: "me" });
-        const labels = (res.data.labels ?? [])
-          .map((l) => `  ${l.id}  ${l.name}${l.type === "system" ? "  (system)" : ""}`)
+        const labels = (await mailbox.listLabels())
+          .map((l) => `  ${l.id}  ${l.name}${l.system ? "  (system)" : ""}`)
           .join("\n");
 
         return text(`Labels in ${acct.email}:\n${labels || "  none"}`);

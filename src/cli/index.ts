@@ -1,6 +1,10 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
+import readline from "node:readline/promises";
 import { AccountRegistry } from "../auth/accounts.js";
+import { normaliseAppPassword, verifyAppPassword } from "../mailbox/imap.js";
+import { openBrowser } from "../util/browser.js";
+import { promptSecret } from "../util/prompt.js";
 import { loadOAuthClientConfig } from "../auth/client.js";
 import { runOAuthFlow } from "../auth/flow.js";
 import { createTokenStore } from "../auth/store.js";
@@ -13,7 +17,8 @@ const HELP = `gmail-multi-mcp — multi-account Gmail for MCP clients
 USAGE
   gmail-multi-mcp setup                  Guided first-time setup — START HERE
   gmail-multi-mcp                        Run the MCP server on stdio (default)
-  gmail-multi-mcp auth add [options]     Connect a Gmail account
+  gmail-multi-mcp auth add [options]     Connect an account with OAuth
+  gmail-multi-mcp auth add-password <e>  Connect an account with an app password
   gmail-multi-mcp auth list              Show connected accounts
   gmail-multi-mcp auth tier <email> <t>  Change an account's tier (re-authorises)
   gmail-multi-mcp auth allow <email> ... Set a send allowlist for an account
@@ -29,9 +34,16 @@ AUTH ADD OPTIONS
   you can sign into a different account each time — including one your browser
   is not currently signed into.
 
+TWO WAYS TO CONNECT
+  auth add            OAuth. Needs a free Google Cloud project once (run
+                      'setup'). Access is scoped, so a readonly account is
+                      enforced by Google and cannot write at all.
+  auth add-password   App password over IMAP/SMTP. No Cloud project, about
+                      30 seconds per mailbox. The credential always has full
+                      access, so tiers are enforced by this server only.
+
 TIERS
-  readonly   Read and search only. Enforced by Google — the granted scope
-             physically cannot write, even if this process is compromised.
+  readonly   Read and search only.
   draft      Read, plus create and edit drafts. Never sends.
   send       Read, draft, send, label, trash. Every write is confirmed.
 
@@ -51,13 +63,23 @@ ENVIRONMENT
   GMAIL_MCP_MAX_MUTATIONS_PER_HOUR   Default 60
 `;
 
-function out(s: string): void {
+function out(s = ""): void {
   process.stdout.write(s.endsWith("\n") ? s : `${s}\n`);
 }
 
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(`--${name}`);
   return i >= 0 ? args[i + 1] : undefined;
+}
+
+/** One-shot prompt for the handful of CLI commands that need a single answer. */
+async function ask(question: string): Promise<string> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return await rl.question(question);
+  } finally {
+    rl.close();
+  }
 }
 
 function parseTier(raw: string | undefined, fallback: Tier = "readonly"): Tier {
@@ -111,6 +133,80 @@ async function authAdd(args: string[]): Promise<void> {
       `\nThis account can send mail. Consider restricting recipients:\n` +
         `  gmail-multi-mcp auth allow ${email} @yourdomain.com`,
     );
+  }
+}
+
+async function authAddPassword(args: string[]): Promise<void> {
+  const email = args.find((a) => a.includes("@"));
+  if (!email) {
+    throw new UserFacingError(
+      "Usage: gmail-multi-mcp auth add-password <email> [--tier <t>] [--label <name>]",
+    );
+  }
+
+  const cfg = loadConfig();
+  const tier = parseTier(flag(args, "tier"));
+  const label = flag(args, "label");
+
+  out();
+  out(`Connecting ${email} with a Gmail app password.`);
+  out();
+  out("  1. Turn on 2-Step Verification if it is not already on.");
+  out("  2. Generate an app password at:");
+  out("     https://myaccount.google.com/apppasswords");
+  out("  3. Paste the 16-character password below. Spaces are fine.");
+  out();
+  out("  Note: an app password grants FULL access to this mailbox. Google");
+  out("  cannot restrict it to read-only, so the tier you choose is enforced");
+  out("  by this server rather than by Google. Use OAuth (`auth add`) if you");
+  out("  need a mailbox that is provably incapable of sending.");
+  out();
+
+  const openNow = (await ask("  Open the app-password page now? [Y/n] ")).trim().toLowerCase();
+  if (openNow === "" || openNow === "y" || openNow === "yes") {
+    openBrowser("https://myaccount.google.com/apppasswords");
+  }
+
+  const raw = await promptSecret("  App password: ");
+  const appPassword = normaliseAppPassword(raw);
+
+  if (appPassword.length < 12) {
+    throw new UserFacingError(
+      "That does not look like a Gmail app password.",
+      "App passwords are 16 characters, usually shown as four groups of four.",
+    );
+  }
+
+  out("  Checking it against Gmail…");
+  const { folders } = await verifyAppPassword(email, appPassword);
+  out(`  Works — ${folders} folders visible.`);
+
+  const [registry, store] = await Promise.all([
+    AccountRegistry.load(cfg),
+    createTokenStore(cfg),
+  ]);
+  const previous = registry.find(email);
+
+  await store.set(email, { app_password: appPassword });
+  await registry.upsert({
+    email,
+    tier,
+    auth: "app-password",
+    ...(label ? { label } : previous?.label ? { label: previous.label } : {}),
+    ...(previous?.allowedRecipients ? { allowedRecipients: previous.allowedRecipients } : {}),
+  });
+
+  out();
+  out(
+    previous
+      ? `Reconnected ${email} at tier "${tier}" using an app password.`
+      : `Connected ${email} at tier "${tier}" using an app password.`,
+  );
+  out(`Stored via: ${store.backend}`);
+  if (tier === "send") {
+    out();
+    out(`Consider restricting who it can email:`);
+    out(`  gmail-multi-mcp auth allow ${email} @yourdomain.com`);
   }
 }
 
@@ -273,6 +369,9 @@ export async function runCli(argv: string[]): Promise<number> {
       switch (sub) {
         case "add":
           await authAdd(rest);
+          return 0;
+        case "add-password":
+          await authAddPassword(rest);
           return 0;
         case "list":
           await authList();

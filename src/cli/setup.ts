@@ -2,13 +2,15 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
-import { AccountRegistry } from "../auth/accounts.js";
+import { AccountRegistry, type Account } from "../auth/accounts.js";
 import { loadOAuthClientConfig } from "../auth/client.js";
 import { runOAuthFlow } from "../auth/flow.js";
 import { createTokenStore } from "../auth/store.js";
 import { loadConfig, type Tier } from "../config.js";
 import { UserFacingError } from "../errors.js";
+import { normaliseAppPassword, verifyAppPassword } from "../mailbox/imap.js";
 import { openBrowser } from "../util/browser.js";
+import { promptSecret } from "../util/prompt.js";
 
 const CONSOLE_URLS = {
   createProject: "https://console.cloud.google.com/projectcreate",
@@ -149,15 +151,35 @@ export async function runSetup(): Promise<void> {
     rule();
     out();
     out("  This connects your Gmail accounts — as many as you like — to Claude");
-    out("  or any other MCP client.");
+    out("  or any other MCP client. There are two ways to do it.");
+    out();
+    out("    [1] App password        ~30 seconds per mailbox, nothing else needed");
+    out("    [2] Google Cloud OAuth  ~2 minutes of setup once, then 1 click each");
+    out();
+    out("  Option 1 is what most people want. You generate a password in your");
+    out("  Google account settings and paste it in. No Cloud console at all.");
+    out();
+    out("  Option 2 is worth it for one reason: OAuth can grant read-only");
+    out("  access, so a mailbox becomes physically incapable of sending — a");
+    out("  guarantee Google enforces, not this program. An app password always");
+    out("  carries full access, so with option 1 a 'readonly' account is only");
+    out("  as safe as this code is correct.");
+    out();
+    out("  You can mix them: personal on an app password, work on OAuth.");
+    out();
+
+    const method = (await ask("  Choose 1 or 2 [1]: ")).trim() || "1";
+    if (method !== "2") {
+      await connectAppPasswordAccounts(rl);
+      return;
+    }
+
     out();
     out("  Google requires every person to create their own free API project");
-    out("  before any tool can read their Gmail. There is no way around this:");
-    out("  Gmail's scopes are 'restricted', and a shared app would need an");
-    out("  annual paid security audit. The upside is real, though — your mail");
-    out("  only ever touches your own Google project, and nobody else's.");
-    out();
-    out("  It takes about two minutes, once. Then you can add accounts freely.");
+    out("  before any tool can use OAuth for Gmail. Gmail's scopes are");
+    out("  'restricted', and a shared app would need an annual paid security");
+    out("  audit. The upside is real: your mail only ever touches your own");
+    out("  Google project, and nobody else's.");
     out();
 
     // Already configured? Offer to skip straight to adding accounts.
@@ -298,6 +320,106 @@ export async function runSetup(): Promise<void> {
   }
 }
 
+/**
+ * The no-Cloud-project path: generate an app password per mailbox and paste it.
+ * Each one is verified against Gmail before being stored, so a typo or a
+ * disabled IMAP setting surfaces here rather than on the first tool call.
+ */
+async function connectAppPasswordAccounts(rl: readline.Interface): Promise<void> {
+  const cfg = loadConfig();
+  const [registry, store] = await Promise.all([
+    AccountRegistry.load(cfg),
+    createTokenStore(cfg),
+  ]);
+
+  out();
+  rule();
+  out("  Connecting with app passwords");
+  rule();
+  out();
+  out("  For each mailbox you want to connect:");
+  out("    1. Sign in to that Google account");
+  out("    2. Turn on 2-Step Verification if it is not already on");
+  out("    3. Generate an app password and paste it here");
+  out();
+  out("  App passwords are unavailable if the account uses Advanced Protection,");
+  out("  and a Workspace admin can switch them off for a whole domain. If the");
+  out("  page says they are not available, that account needs option 2 (OAuth).");
+  out();
+
+  for (;;) {
+    const existing = registry.list();
+    if (existing.length) {
+      out();
+      out(`  Connected so far: ${existing.map((a) => a.email).join(", ")}`);
+    }
+
+    out();
+    const more = (await rl.question("  Connect a mailbox now? [Y/n] ")).trim().toLowerCase();
+    if (more === "n" || more === "no") break;
+
+    const email = (await rl.question("  Gmail address: ")).trim();
+    if (!email.includes("@")) {
+      out("  That does not look like an email address.");
+      continue;
+    }
+
+    out();
+    out("  What should this account be allowed to do?");
+    for (const c of TIER_CHOICES) out(`    [${c.key}] ${c.tier.padEnd(9)} ${c.blurb}`);
+    out();
+    out("  Remember: with an app password these are enforced by this program,");
+    out("  not by Google. The credential itself always has full access.");
+    out();
+    const pick = (await rl.question("  Choose 1, 2 or 3 [1]: ")).trim() || "1";
+    const tier = TIER_CHOICES.find((c) => c.key === pick)?.tier ?? "readonly";
+
+    const label = (
+      await rl.question("  Short name for it, e.g. work or personal (optional): ")
+    ).trim();
+
+    out();
+    const openNow = (
+      await rl.question("  Open the app-password page for this account? [Y/n] ")
+    ).trim().toLowerCase();
+    if (openNow === "" || openNow === "y" || openNow === "yes") {
+      visit("https://myaccount.google.com/apppasswords");
+    }
+
+    const raw = await promptSecret("  Paste the app password (spaces are fine): ");
+    const appPassword = normaliseAppPassword(raw);
+
+    if (appPassword.length < 12) {
+      out("  That is too short to be an app password — they are 16 characters.");
+      continue;
+    }
+
+    try {
+      out("  Checking it against Gmail…");
+      const { folders } = await verifyAppPassword(email, appPassword);
+
+      const previous = registry.find(email);
+      await store.set(email, { app_password: appPassword });
+      await registry.upsert({
+        email,
+        tier,
+        auth: "app-password",
+        ...(label ? { label } : previous?.label ? { label: previous.label } : {}),
+        ...(previous?.allowedRecipients ? { allowedRecipients: previous.allowedRecipients } : {}),
+      });
+
+      out(`  Connected ${email} at tier "${tier}" — ${folders} folders visible.`);
+    } catch (err) {
+      out();
+      out(`  Could not connect: ${err instanceof Error ? err.message : String(err)}`);
+      out("  Check 2-Step Verification is on and IMAP is enabled in Gmail →");
+      out("  Settings → Forwarding and POP/IMAP, then try again.");
+    }
+  }
+
+  summarise(registry.list());
+}
+
 const TIER_CHOICES: { key: string; tier: Tier; blurb: string }[] = [
   { key: "1", tier: "readonly", blurb: "Read and search only. Cannot write — enforced by Google." },
   { key: "2", tier: "draft", blurb: "Read, plus write drafts you send yourself. Never sends." },
@@ -370,22 +492,28 @@ async function connectAccounts(
     }
   }
 
-  const final = registry.list();
+  summarise(registry.list());
+}
+
+/** Closing report, shared by both connection paths. */
+function summarise(accounts: Account[]): void {
   out();
   rule();
-  if (final.length) {
-    out(`  Done — ${final.length} account(s) connected:`);
-    for (const a of final) {
-      out(`    ${a.email}${a.label ? `  [${a.label}]` : ""}  ·  ${a.tier}`);
+  if (accounts.length) {
+    out(`  Done — ${accounts.length} account(s) connected:`);
+    for (const a of accounts) {
+      const how = (a.auth ?? "oauth") === "app-password" ? "app password" : "OAuth";
+      out(`    ${a.email}${a.label ? `  [${a.label}]` : ""}  ·  ${a.tier}  ·  ${how}`);
     }
     out();
     out("  Wire it into Claude Code with:");
     out("    claude mcp add gmail -- gmail-multi-mcp");
     out();
-    out("  Then ask it to \"list my gmail accounts\".");
+    out('  Then ask it to "list my gmail accounts".');
   } else {
     out("  No accounts connected yet. Add one any time with:");
-    out("    gmail-multi-mcp auth add --tier readonly --label personal");
+    out("    gmail-multi-mcp auth add-password you@gmail.com   (simple)");
+    out("    gmail-multi-mcp auth add --tier readonly          (OAuth)");
   }
   rule();
   out();

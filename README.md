@@ -4,15 +4,15 @@ An MCP server that gives an AI assistant access to **several Gmail accounts at o
 
 Most Gmail MCP servers connect one account and expose `send_email`. That is fine until the assistant is reading an inbox that strangers can write to. This one is built around three ideas:
 
-- **Tiered access per account.** Each account is connected at `readonly`, `draft`, or `send`. Your personal inbox can be read-only forever while one client account is allowed to send.
+- **Tiered access per account.** Each account is connected at `readonly`, `draft`, or `send`. Your personal inbox can be read-only forever while one work account is allowed to send.
 - **Two-phase writes.** Nothing irreversible happens on one tool call. The first call returns a preview and a token; the second call executes, and only if every argument is byte-identical to what was previewed.
 - **Mail is untrusted input.** Message bodies are fenced with a random nonce and labelled as data, and known coercion patterns are flagged to the model and written to an audit log.
 
 ---
 
-> **Status: 0.1.0, not yet on npm.** 70 tests cover the safety logic, the MCP protocol layer (via an end-to-end handshake against the built server), and the OAuth flow up to the consent screen — authorization URL, PKCE, scope selection, and every callback rejection path.
+> **Status: 0.1.0, not yet on npm.** 101 tests cover the safety logic, the MCP protocol layer (via an end-to-end handshake against the built server), the OAuth flow up to the consent screen, and the IMAP backend's pure logic.
 >
-> Two things remain unverified against real Google infrastructure: the **token exchange** that follows a successful consent, and the **live Gmail API calls**. Both need a real Cloud project and a real sign-in. If you are the first to walk that path, please [open an issue](https://github.com/dtaveeva/gmail-multi-mcp/issues) with whatever you hit.
+> What remains unverified against real infrastructure: the **OAuth token exchange** after a successful consent, and **live Gmail calls on both backends**. Those need real credentials. If you are the first to walk either path, please [open an issue](https://github.com/dtaveeva/gmail-multi-mcp/issues) with whatever you hit.
 
 ## Install
 
@@ -38,13 +38,29 @@ It walks you through the whole thing — opens each Google page in the right ord
 
 If you would rather do it by hand, the same steps are written out below.
 
-### Why do I need a Google project at all?
+### Two ways to connect
 
-Because Google requires it. Gmail's scopes are classified **restricted** — the most sensitive tier — and any app that offers one shared sign-in for everybody must pass a third-party security audit that recurs annually and costs real money. Tools that skip it are capped at 100 users and show a warning screen to every one of them.
+The wizard asks which you want. You can mix them — personal on an app password, work on OAuth.
 
-So each person creates their own free project. It is genuinely the only workable answer for a self-hosted tool, and it has a real upside: your mail only ever touches your own Google project. No shared server holds your tokens, and there is no third party to trust or to breach.
+|  | **App password** | **Google Cloud OAuth** |
+|---|---|---|
+| Setup | ~30 seconds per mailbox | ~2 minutes once, then 1 click each |
+| Google Cloud project | **not needed** | required (free) |
+| Read-only accounts | enforced by this program | **enforced by Google** — the account physically cannot send |
+| Works with | most personal Gmail | any account |
+| Blocked by | Advanced Protection; Workspace admins can disable | nothing |
 
-You do this once. After that, adding a fifth mailbox is one command.
+**Most people want app passwords.** You generate one in your Google account settings, paste it in, done. No console, no consent screen, no verification.
+
+**OAuth earns its two minutes for exactly one reason:** it can grant scoped, read-only access. A mailbox connected `readonly` over OAuth is incapable of sending, and that is enforced by Google rather than by this code — so it holds even if this program is compromised. An app password is a single all-or-nothing credential, so with it a `readonly` account is only as safe as this code is correct.
+
+If you want your personal inbox readable but provably un-sendable-from, use OAuth for that one. Otherwise app passwords are fine.
+
+### Why does OAuth need a Google project?
+
+Because Google requires it. Gmail's scopes are classified **restricted** — the most sensitive tier — and any app offering one shared sign-in for everybody must pass a third-party security audit that recurs annually and costs real money. Tools that skip it are capped at 100 users and show a warning screen to every one of them.
+
+So each person creates their own free project. There is a real upside: your mail only ever touches your own Google project, with no shared server holding your tokens. But it is genuinely optional now — app passwords skip it entirely.
 
 ---
 
@@ -122,7 +138,16 @@ gmail-multi-mcp doctor                             # diagnose setup problems
 
 ### Connecting a second, third, fifth account
 
-Run `auth add` once per mailbox. Google's account chooser is always shown, so each run can target a different account — including one your browser is not currently signed into. You never need to sign out of anything.
+With an **app password** — no Cloud project involved:
+
+```bash
+gmail-multi-mcp auth add-password personal@gmail.com --tier readonly --label personal
+gmail-multi-mcp auth add-password work@acme.com --tier send --label work
+```
+
+It opens Google's app-password page, takes the pasted password without echoing it, strips the spaces Gmail puts in it, and verifies it against Gmail before storing anything — so a typo or a disabled IMAP setting fails now rather than on your first search.
+
+With **OAuth** — run `auth add` once per mailbox. Google's account chooser is always shown, so each run can target a different account, including one your browser is not currently signed into. You never need to sign out of anything.
 
 ```bash
 gmail-multi-mcp auth add --tier readonly --label personal
@@ -203,7 +228,12 @@ Ask it to `list my gmail accounts` to confirm the connection.
 
 ### Tiers
 
-`readonly` is the only tier whose limits are enforced by Google rather than by this code. The granted scope is physically incapable of writing, so even total compromise of this process cannot alter that mailbox. `draft` and `send` are enforced in this server's own logic — real defense in depth, but a different kind of guarantee. The README says this plainly because a security control you misunderstand is worse than one you don't have.
+How strongly a tier binds depends on how the account was connected:
+
+- **OAuth + `readonly`** — the granted scope is physically incapable of writing. Even total compromise of this process cannot alter that mailbox. This is the only guarantee here that does not depend on my code being correct.
+- **OAuth + `draft` / `send`**, and **every app-password account** — enforced by this server's own logic. Real defense in depth, but a different kind of guarantee.
+
+`gmail_list_accounts` reports which of these applies per account, so an assistant never describes an app-password `readonly` mailbox as if Google were enforcing it. This is spelled out rather than smoothed over, because a security control you misunderstand is worse than one you know you don't have.
 
 `GMAIL_MCP_READONLY=1` forces every account down to readonly regardless of its configured tier — useful when you want an assistant triaging mail with no possibility of a write.
 

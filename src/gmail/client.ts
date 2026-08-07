@@ -2,7 +2,7 @@ import { gmail, type gmail_v1 } from "@googleapis/gmail";
 import { OAuth2Client } from "google-auth-library";
 import type { Account } from "../auth/accounts.js";
 import { createOAuth2Client, type OAuthClientConfig } from "../auth/client.js";
-import type { TokenStore } from "../auth/store.js";
+import { isAppPassword, type TokenStore } from "../auth/store.js";
 import { UserFacingError } from "../errors.js";
 
 export type Gmail = gmail_v1.Gmail;
@@ -33,13 +33,21 @@ export class GmailClientFactory {
     if (cached) return cached;
 
     const clientConfig = await this.clientConfigProvider();
-    const stored = await this.store.get(account.email);
-    if (!stored?.refresh_token) {
+    const credential = await this.store.get(account.email);
+
+    if (!credential) {
       throw new UserFacingError(
         `No stored credentials for ${account.email}.`,
         `Reconnect it with: gmail-multi-mcp auth add --tier ${account.tier}`,
       );
     }
+    if (isAppPassword(credential)) {
+      throw new UserFacingError(
+        `${account.email} is connected with an app password, not OAuth.`,
+        "This is an internal routing error — please report it.",
+      );
+    }
+    const stored = credential;
 
     const auth: OAuth2Client = createOAuth2Client(clientConfig);
     auth.setCredentials({

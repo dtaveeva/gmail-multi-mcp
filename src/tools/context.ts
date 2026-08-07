@@ -1,7 +1,8 @@
 import type { Account, AccountRegistry } from "../auth/accounts.js";
 import type { Config } from "../config.js";
 import { renderError } from "../errors.js";
-import { explainGoogleError, type Gmail, type GmailClientFactory } from "../gmail/client.js";
+import { explainGoogleError } from "../gmail/client.js";
+import type { Mailbox, MailboxFactory } from "../mailbox/index.js";
 import type { AuditLog } from "../safety/audit.js";
 import type { ConfirmationStore } from "../safety/confirm.js";
 import type { RateLimiter } from "../safety/ratelimit.js";
@@ -9,7 +10,7 @@ import type { RateLimiter } from "../safety/ratelimit.js";
 export interface ToolContext {
   cfg: Config;
   registry: AccountRegistry;
-  clients: GmailClientFactory;
+  mailboxes: MailboxFactory;
   confirmations: ConfirmationStore;
   limiter: RateLimiter;
   audit: AuditLog;
@@ -29,14 +30,14 @@ export function failure(body: string): ToolResult {
   return { content: [{ type: "text", text: body }], isError: true };
 }
 
-/** Resolve an account reference and its authenticated Gmail client together. */
+/** Resolve an account reference and a mailbox for it, whatever its backend. */
 export async function resolve(
   ctx: ToolContext,
   ref: string,
-): Promise<{ account: Account; gmail: Gmail }> {
+): Promise<{ account: Account; mailbox: Mailbox }> {
   const account = ctx.registry.require(ref);
-  const gmail = await ctx.clients.forAccount(account);
-  return { account, gmail };
+  const mailbox = await ctx.mailboxes.forAccount(account);
+  return { account, mailbox };
 }
 
 /**

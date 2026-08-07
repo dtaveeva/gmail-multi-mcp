@@ -34,7 +34,7 @@ Everything below follows from that.
 
 *The injection succeeds and the model decides to send mail.*
 
-- Sending requires the account to be at `send` tier. An account connected `readonly` cannot send — enforced by Google's own scope grant, not by this code.
+- Sending requires the account to be at `send` tier. An account connected `readonly` **over OAuth** cannot send — enforced by Google's own scope grant, not by this code. An account connected with an **app password** holds a credential that always has full mailbox access, so its tier is enforced here instead; see "App passwords" below.
 - Sending is two-phase. The first call only previews; the payload is rendered into the transcript where a human can see it.
 - The confirmation token is bound to a SHA-256 fingerprint of the exact arguments. Previewing a benign message and then sending a different one fails.
 - Tokens are single-use and burned even on a failed redemption, so a mismatch cannot be retried against the same token.
@@ -68,6 +68,22 @@ Every tool requires an explicit `account` argument; there is no implicit default
 Refresh tokens go to the OS keychain (Windows Credential Manager, macOS Keychain, libsecret). Where no keychain exists, an AES-256-GCM encrypted file is used. The account registry and audit log are written `0600`.
 
 ---
+
+## App passwords: what you trade away
+
+Connecting with an app password removes the Google Cloud setup entirely, at a cost worth stating precisely.
+
+**An app password cannot be scoped.** Google issues one credential with full mailbox access — read, send, delete. There is no read-only variant. So for these accounts:
+
+- The `readonly` and `draft` tiers are checks in this server's code. If this process is compromised, or if a bug lets a call through, nothing at the Google end will stop a write. With OAuth + `readonly`, Google itself refuses.
+- The credential is long-lived and does not rotate. Revocation is manual, at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords).
+- It is stored the same way OAuth tokens are — OS keychain, or AES-256-GCM if no keychain exists — so at-rest handling is unchanged. What changes is the value of the secret if it leaks: an app password is a skeleton key for that mailbox until revoked, whereas a refresh token is bounded by the scopes it was granted.
+
+**Everything else still applies.** Two-phase confirmation, recipient allowlists, rate limits, untrusted-content containment, and the audit log all sit above the backend and behave identically.
+
+**Recommendation.** Use OAuth for any mailbox where "can be read but provably cannot send" is a property you actually want to rely on. Use app passwords for the rest. `gmail_list_accounts` always reports which applies, so an assistant cannot mistake one for the other.
+
+Note also that app passwords require 2-Step Verification, are unavailable on accounts enrolled in Advanced Protection, and can be disabled domain-wide by a Workspace administrator.
 
 ## Threats NOT addressed
 
