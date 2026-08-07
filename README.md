@@ -10,9 +10,34 @@ Most Gmail MCP servers connect one account and expose `send_email`. That is fine
 
 ---
 
-> **Status: 0.1.0, not yet on npm.** 101 tests cover the safety logic, the MCP protocol layer (via an end-to-end handshake against the built server), the OAuth flow up to the consent screen, and the IMAP backend's pure logic.
+> **Status: 0.1.0, not yet on npm.** 140 tests cover the safety logic, the MCP protocol layer (an end-to-end handshake against the built server), the OAuth flow, the browser setup pages, and the IMAP backend's pure logic.
 >
-> What remains unverified against real infrastructure: the **OAuth token exchange** after a successful consent, and **live Gmail calls on both backends**. Those need real credentials. If you are the first to walk either path, please [open an issue](https://github.com/dtaveeva/gmail-multi-mcp/issues) with whatever you hit.
+> **Verified live on real Gmail:** connecting two accounts by in-chat Google sign-in, the OAuth token exchange, reading and searching, and two-phase sending in both directions between the accounts. The **IMAP / app-password backend's** live calls are so far exercised only by their pure-logic tests — if you connect a mailbox that way and something breaks, please [open an issue](https://github.com/dtaveeva/gmail-multi-mcp/issues) with whatever you hit.
+
+## Quick start
+
+1. **Download and build it** (needs [Node 18+](https://nodejs.org)):
+
+   ```bash
+   git clone https://github.com/dtaveeva/gmail-multi-mcp.git
+   cd gmail-multi-mcp
+   npm install
+   npm run build
+   ```
+
+2. **Wire it into your AI assistant** — one line for Claude Code, or a small config block for Claude Desktop. See [Wiring it into a client](#wiring-it-into-a-client).
+
+3. **Connect a mailbox from the chat** — just ask your assistant:
+
+   > connect my gmail with google sign-in
+
+   A page opens on your own machine and walks you through a one-time (~2 minute) Google setup, then signs you in. Repeat the ask for each account you want. Prefer no Google project at all? See [Connecting accounts from inside the chat](#connecting-accounts-from-inside-the-chat).
+
+4. **Use it** — "search my work inbox for unread invoices", "reply to Dana's last email from my work account". Every send shows you a preview and asks you to confirm the sending account and recipients before anything leaves your mailbox.
+
+> By downloading or using this software you agree to the [Terms of Use](TERMS.md). It is provided **with no warranty — you use it at your own risk.**
+
+---
 
 ## Install
 
@@ -274,6 +299,12 @@ GMAIL_MCP_CONFIRM_MODE=strict
 
 In strict mode the token is printed to the **server's terminal** and never returned to the model, so redeeming it requires a human to read it off the screen. Slower, and genuinely un-bypassable by the model.
 
+### Sender confirmation
+
+In a multi-account setup the easiest mistake is sending from the *wrong* mailbox — an assistant picks a plausible account the user never actually named. The two-phase token binds the sending account (swap it after the preview and the token is refused), but binding only catches a change *after* the preview, not a wrong choice made before it.
+
+So every send preview opens with a banner that names the sending account and asks for it to be confirmed, and the server instructs assistants to confirm *which* account to send from whenever the user did not say. The sender is also part of the confirmation fingerprint, so it cannot be quietly changed between preview and send. If you want to remove the question entirely for a given inbox, connect it below `send` tier — an account that cannot send cannot be the wrong sender.
+
 ### Untrusted content handling
 
 Anyone can email an address this server can read, so every message body is attacker-controlled input. Bodies are wrapped in a fence carrying a per-call random nonce — content cannot guess the closing delimiter and "escape" into instruction context — and prefixed with an explicit statement that the block is data. Forged fence markers inside the content are stripped.
@@ -344,6 +375,12 @@ Note: `google-auth-library` is pinned to the exact version `googleapis-common` d
 
 See [SECURITY.md](SECURITY.md) for the threat model and what this server does *not* protect against.
 
+## Disclaimer
+
+This software is provided free, **with no warranty of any kind, and you use it entirely at your own risk.** It sends and modifies real email from real accounts, frequently driven by an AI assistant that can be influenced by the very mail it reads. The safeguards documented above reduce that risk but do not eliminate it. The author is **not liable** for anything that results from using it — lost or exposed mail, mistaken sends, account suspensions, or actions taken by an AI on your behalf. You are responsible for what you connect it to and what it does.
+
+Full terms: **[Terms of Use](TERMS.md)**. By downloading, installing, or running the Software you accept them.
+
 ## License
 
-MIT
+[MIT](LICENSE) — see also the [Terms of Use](TERMS.md).

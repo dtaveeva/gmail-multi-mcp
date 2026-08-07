@@ -30,6 +30,7 @@
     "dist/src",
     "README.md",
     "SECURITY.md",
+    "TERMS.md",
     "LICENSE"
   ],
   "engines": {
