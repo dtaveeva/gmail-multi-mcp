@@ -115,7 +115,9 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext): void {
 
         const draftId = await mailbox.createDraft(msg, threading);
         // Remember it, so gmail_delete_draft can undo this — and only this.
-        await recordCreatedDraft(ctx.cfg.home, acct.email, draftId);
+        // Pin the Gmail message id too, so a reused draft id can't match later.
+        const created = await mailbox.getDraft(draftId);
+        await recordCreatedDraft(ctx.cfg.home, acct.email, draftId, created.id);
 
         return text(
           `Draft saved in ${acct.email}.\n  draft id: ${draftId}\n\n${previewText(msg)}`,
@@ -491,15 +493,15 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext): void {
           const { account: acct, mailbox } = await resolve(ctx, account);
           assertCapability(acct, "draft", ctx.cfg);
 
-          if (!(await isCreatedDraft(ctx.cfg.home, acct.email, draft_id))) {
+          const parsed = await mailbox.getDraft(draft_id);
+          if (!(await isCreatedDraft(ctx.cfg.home, acct.email, draft_id, parsed.id))) {
             throw new UserFacingError(
-              `Draft ${draft_id} was not created by this server, so it will not be deleted.`,
-              "Only drafts made with gmail_create_draft can be deleted here. " +
-                "Delete other drafts in Gmail yourself.",
+              `Draft ${draft_id} is not one this server created (or it has changed since), so it will not be deleted.`,
+              "Only drafts made with gmail_create_draft, and not edited since, can be " +
+                "deleted here. Delete other drafts in Gmail yourself.",
             );
           }
 
-          const parsed = await mailbox.getDraft(draft_id);
           const details = contain(
             `To:      ${parsed.to}\nSubject: ${parsed.subject}\nDate:    ${parsed.date}\n` +
               (parsed.attachments.length
@@ -511,7 +513,9 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext): void {
           const summary =
             `Account: ${acct.email}\nDelete draft ${draft_id} PERMANENTLY (drafts skip Trash).\n\n` +
             details.text;
-          const payload = { draft_id };
+          // Bind the token to the message id as well: on the REST backend an
+          // edited draft gets a new message id, so the preview stays honest.
+          const payload = { draft_id, message_id: parsed.id };
 
           if (!confirm_token) {
             const issued = ctx.confirmations.issue("gmail_delete_draft", acct.email, payload);
