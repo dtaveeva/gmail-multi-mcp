@@ -113,6 +113,8 @@ Stated plainly, because a misunderstood boundary is worse than a missing feature
 
 **Drafts are not confirmed.** A draft never leaves the mailbox and is trivially reversible. Making the safe path frictionless is what makes the `draft` tier worth choosing over `send`.
 
+**Deleting a draft is confirmed, and limited to the server's own drafts.** Gmail drafts skip Trash, so `gmail_delete_draft` is permanent. To keep the `draft` tier's promise that nothing of the user's is lost, it refuses any draft id this server did not create (tracked in `created-drafts.json`, mode 0600), so a prompt-injected call can at most undo the server's own drafts. It is two-phase, takes exactly one id (over IMAP a single positive UID, never a range), and shows the draft inside the untrusted-content fence before the token is issued.
+
 **Audit logging never blocks mail.** An unwritable audit log warns loudly on stderr but does not take the mailbox offline. Reasonable people disagree; if you need fail-closed auditing, that is a small change in `src/safety/audit.ts`.
 
 **Errors are deliberately terse.** Raw Google API errors can echo request bodies into a transcript. Only `UserFacingError` messages are surfaced verbatim; everything else is reduced to its message string.

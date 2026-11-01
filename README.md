@@ -273,13 +273,13 @@ If the Cloud client is not set up, `gmail_setup_status` returns the console link
 | `gmail_list_labels` | readonly | — |
 | `gmail_create_draft` | draft | no — drafts never leave the mailbox |
 | `gmail_list_drafts` | readonly | — |
-| `gmail_delete_draft` | draft | **yes** — permanent, drafts only |
+| `gmail_delete_draft` | draft | **yes** — permanent, only drafts this server created |
 | `gmail_send` | send | **yes** |
 | `gmail_send_draft` | send | **yes** |
 | `gmail_modify_labels` | send | **yes** |
 | `gmail_trash` | send | **yes** |
 
-**Deliberately absent:** permanent deletion, and anything under `gmail.settings` — auto-forwarding rules and filters are a standing exfiltration channel that survives long after a session ends, so this server never requests a scope that can create one. Trash is recoverable for 30 days; permanent deletion is not, so it stays a human action. The one narrow exception is `gmail_delete_draft`: Gmail drafts never pass through Trash, so cleaning up a draft (typically one this server just created) is necessarily permanent. It acts on a single draft id, previews the draft before the token is issued, and cannot touch sent or received mail.
+**Deliberately absent:** permanent deletion, and anything under `gmail.settings` — auto-forwarding rules and filters are a standing exfiltration channel that survives long after a session ends, so this server never requests a scope that can create one. Trash is recoverable for 30 days; permanent deletion is not, so it stays a human action. The one narrow exception is `gmail_delete_draft`: Gmail drafts never pass through Trash, so cleaning up a draft (typically one this server just created) is necessarily permanent. It only accepts drafts that this server itself created with `gmail_create_draft` (recorded in `created-drafts.json` under `GMAIL_MCP_HOME`), acts on a single draft id, previews the draft before the token is issued, and cannot touch drafts the user wrote in Gmail, or sent or received mail.
 
 ---
 

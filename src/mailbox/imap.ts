@@ -292,6 +292,7 @@ export class ImapMailbox implements Mailbox {
   }
 
   async getDraft(draftId: string): Promise<ParsedMessage> {
+    assertSingleUid(draftId);
     const { drafts } = await this.specialFolders();
 
     return this.withFolder(
@@ -339,6 +340,7 @@ export class ImapMailbox implements Mailbox {
   }
 
   async sendDraft(draftId: string): Promise<string> {
+    assertSingleUid(draftId);
     const draft = await this.getDraft(draftId);
     const { drafts } = await this.specialFolders();
 
@@ -390,11 +392,14 @@ export class ImapMailbox implements Mailbox {
   }
 
   async deleteDraft(draftId: string): Promise<void> {
+    assertSingleUid(draftId);
     const { drafts } = await this.specialFolders();
     await this.withFolder(drafts, async (client) => {
       const msg = await client.fetchOne(draftId, { uid: true }, { uid: true });
-      if (!msg) throw new UserFacingError(`No draft with id ${draftId} in ${this.creds.email}.`);
-      await client.messageDelete(draftId, { uid: true });
+      if (!msg || String(msg.uid) !== draftId) {
+        throw new UserFacingError(`No draft with id ${draftId} in ${this.creds.email}.`);
+      }
+      await client.messageDelete(String(msg.uid), { uid: true });
     });
   }
 
@@ -543,4 +548,15 @@ export function explainSmtpError(err: unknown, email: string): UserFacingError {
     );
   }
   return new UserFacingError(`SMTP error for ${email}: ${message}`);
+}
+
+/**
+ * Over IMAP a draft id is a UID, and imapflow treats strings like "1:*" or
+ * "3,9" as sequence sets. Accept exactly one positive integer so a single-id
+ * tool can never act on a range.
+ */
+export function assertSingleUid(id: string): void {
+  if (!/^[1-9][0-9]{0,9}$/.test(id)) {
+    throw new UserFacingError(`Not a valid draft id for this account: ${id}`);
+  }
 }
