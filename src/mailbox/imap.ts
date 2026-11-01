@@ -4,7 +4,15 @@ import nodemailer from "nodemailer";
 import { UserFacingError } from "../errors.js";
 import { buildRawMessage, type OutgoingMessage } from "../gmail/mime.js";
 import { htmlToText, type ParsedMessage } from "../gmail/parse.js";
-import type { Backend, DraftSummary, Label, Mailbox, SearchOptions, ThreadRef } from "./types.js";
+import type {
+  Backend,
+  CreatedDraft,
+  DraftSummary,
+  Label,
+  Mailbox,
+  SearchOptions,
+  ThreadRef,
+} from "./types.js";
 
 export interface ImapCredentials {
   email: string;
@@ -278,7 +286,7 @@ export class ImapMailbox implements Mailbox {
 
   /* -------------------------------- write ------------------------------- */
 
-  async createDraft(message: OutgoingMessage, thread?: ThreadRef): Promise<string> {
+  async createDraft(message: OutgoingMessage, thread?: ThreadRef): Promise<CreatedDraft> {
     const { drafts } = await this.specialFolders();
     const raw = buildRawMessage(thread ? { ...message, ...threadHeaders(thread) } : message);
 
@@ -287,8 +295,19 @@ export class ImapMailbox implements Mailbox {
     if (!res || !res.uid) {
       throw new UserFacingError("Gmail accepted the draft but returned no identifier.");
     }
-    // Over IMAP a draft is identified by its UID in the Drafts folder.
-    return String(res.uid);
+    // Over IMAP a draft is identified by its UID in the Drafts folder. A UID
+    // names exactly the message we appended (an edit makes a new UID), so
+    // reading its X-GM-MSGID back is race-free.
+    const draftId = String(res.uid);
+    const messageId = await this.withFolder(
+      drafts,
+      async (c) => {
+        const msg = await c.fetchOne(draftId, { uid: true, emailId: true } as never, { uid: true });
+        return msg ? toHexId((msg as { emailId?: string }).emailId) : "";
+      },
+      true,
+    );
+    return { draftId, messageId };
   }
 
   async getDraft(draftId: string): Promise<ParsedMessage> {
@@ -391,13 +410,19 @@ export class ImapMailbox implements Mailbox {
     );
   }
 
-  async deleteDraft(draftId: string): Promise<void> {
+  async deleteDraft(draftId: string, expectedMessageId: string): Promise<void> {
     assertSingleUid(draftId);
     const { drafts } = await this.specialFolders();
+    // Check and delete inside one selected-folder session: while the folder
+    // is selected its UIDVALIDITY cannot change, so the UID we verify is the
+    // UID we delete.
     await this.withFolder(drafts, async (client) => {
-      const msg = await client.fetchOne(draftId, { uid: true }, { uid: true });
+      const msg = await client.fetchOne(draftId, { uid: true, emailId: true } as never, { uid: true });
       if (!msg || String(msg.uid) !== draftId) {
         throw new UserFacingError(`No draft with id ${draftId} in ${this.creds.email}.`);
+      }
+      if (!expectedMessageId || toHexId((msg as { emailId?: string }).emailId) !== expectedMessageId) {
+        throw new UserFacingError(`Draft ${draftId} changed since it was checked; not deleted.`);
       }
       await client.messageDelete(String(msg.uid), { uid: true });
     });

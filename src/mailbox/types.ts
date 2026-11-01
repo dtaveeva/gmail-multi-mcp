@@ -37,6 +37,11 @@ export interface SearchOptions {
  * IMAP implementation normalises to hex. An id from a search is therefore
  * usable regardless of which backend produced it.
  */
+export interface CreatedDraft {
+  draftId: string;
+  messageId: string;
+}
+
 /** A draft as listed: enough to pick one, not the whole body. */
 export interface DraftSummary {
   /** Identifier the draft tools take (Gmail draft id, or Drafts-folder UID over IMAP). */
@@ -59,13 +64,17 @@ export interface Mailbox {
   /** Resolve In-Reply-To / References / thread for a reply to `messageId`. */
   threadingFor(messageId: string): Promise<ThreadRef>;
 
-  createDraft(message: OutgoingMessage, thread?: ThreadRef): Promise<string>;
+  /** Returns the new draft id and the Gmail message id behind it, as created. */
+  createDraft(message: OutgoingMessage, thread?: ThreadRef): Promise<CreatedDraft>;
   getDraft(draftId: string): Promise<ParsedMessage>;
   send(message: OutgoingMessage, thread?: ThreadRef): Promise<string>;
   sendDraft(draftId: string): Promise<string>;
   listDrafts(maxResults: number, query?: string): Promise<DraftSummary[]>;
-  /** Permanently delete a draft. Gmail drafts do not go to Trash. */
-  deleteDraft(draftId: string): Promise<void>;
+  /**
+   * Permanently delete a draft, but only if it still holds `expectedMessageId`.
+   * Gmail drafts do not go to Trash.
+   */
+  deleteDraft(draftId: string, expectedMessageId: string): Promise<void>;
 
   modifyLabels(ids: string[], add: string[], remove: string[]): Promise<void>;
   trash(ids: string[]): Promise<void>;

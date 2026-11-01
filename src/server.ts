@@ -12,6 +12,7 @@ import { RateLimiter } from "./safety/ratelimit.js";
 import type { ToolContext } from "./tools/context.js";
 import { registerAccountTools } from "./tools/accounts.js";
 import { registerReadTools } from "./tools/read.js";
+import { registerDraftTools } from "./tools/drafts.js";
 import { registerWriteTools } from "./tools/write.js";
 
 const VERSION = "0.1.0";
@@ -86,6 +87,7 @@ export async function runServer(): Promise<void> {
   registerAccountTools(server, ctx);
   registerReadTools(server, ctx);
   registerWriteTools(server, ctx);
+  registerDraftTools(server, ctx);
 
   // stdout belongs to the JSON-RPC transport; diagnostics go to stderr only.
   const accountCount = ctx.registry.list().length;

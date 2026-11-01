@@ -29,13 +29,13 @@ interface Entry {
 
 const FILE = "created-drafts.json";
 const MAX_ENTRIES = 1000;
-const LOCK_STALE_MS = 10_000;
+const LOCK_STALE_MS = 60_000;
 const LOCK_WAIT_MS = 5_000;
 
 const fileIn = (home: string) => path.join(home, FILE);
 const key = (account: string) => account.trim().toLowerCase();
 
-async function load(home: string): Promise<Entry[]> {
+async function load(home: string, repair = false): Promise<Entry[]> {
   let raw: string;
   try {
     raw = await fs.readFile(fileIn(home), "utf8");
@@ -47,9 +47,12 @@ async function load(home: string): Promise<Entry[]> {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    // Keep the damaged file for inspection and start empty. Empty is the
-    // safe direction: it can only make deletion refuse, never allow it.
-    await fs.rename(fileIn(home), `${fileIn(home)}.corrupt-${Date.now()}`).catch(() => {});
+    // Empty is the safe direction: it can only make deletion refuse, never
+    // allow it. Writers (holding the lock) set the damaged file aside first
+    // so it is kept for inspection rather than overwritten.
+    if (repair) {
+      await fs.rename(fileIn(home), `${fileIn(home)}.corrupt-${Date.now()}`).catch(() => {});
+    }
     return [];
   }
   return Array.isArray(parsed)
@@ -70,20 +73,26 @@ async function save(home: string, entries: Entry[]): Promise<void> {
   await fs.rename(tmp, target);
 }
 
-/** Serialise read-modify-write across calls and processes with an O_EXCL lock file. */
+/**
+ * Serialise read-modify-write across calls and processes with an O_EXCL lock
+ * file holding `pid:token`. The holder only removes a lock that still carries
+ * its own token. A lock is taken over only when it is old AND its owning
+ * process is gone, so a slow but live writer is never overrun.
+ */
 async function withLock<T>(home: string, fn: () => Promise<T>): Promise<T> {
   await fs.mkdir(home, { recursive: true, mode: 0o700 });
   const lock = `${fileIn(home)}.lock`;
+  const token = `${process.pid}:${randomBytes(8).toString("hex")}`;
   const deadline = Date.now() + LOCK_WAIT_MS;
   for (;;) {
     try {
       const h = await fs.open(lock, "wx", 0o600);
+      await h.writeFile(token);
       await h.close();
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      const st = await fs.stat(lock).catch(() => undefined);
-      if (st && Date.now() - st.mtimeMs > LOCK_STALE_MS) {
+      if (await isAbandoned(lock)) {
         await fs.rm(lock, { force: true });
         continue;
       }
@@ -94,7 +103,21 @@ async function withLock<T>(home: string, fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } finally {
-    await fs.rm(lock, { force: true });
+    const held = await fs.readFile(lock, "utf8").catch(() => "");
+    if (held === token) await fs.rm(lock, { force: true });
+  }
+}
+
+async function isAbandoned(lock: string): Promise<boolean> {
+  const st = await fs.stat(lock).catch(() => undefined);
+  if (!st || Date.now() - st.mtimeMs < LOCK_STALE_MS) return false;
+  const pid = Number.parseInt((await fs.readFile(lock, "utf8").catch(() => "")).split(":")[0] ?? "", 10);
+  if (!Number.isInteger(pid) || pid <= 0) return true;
+  try {
+    process.kill(pid, 0);
+    return false; // owner still alive: keep waiting
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ESRCH";
   }
 }
 
@@ -106,7 +129,7 @@ export async function recordCreatedDraft(
 ): Promise<void> {
   if (!draftId || !messageId) return;
   await withLock(home, async () => {
-    const entries = await load(home);
+    const entries = await load(home, true);
     entries.push({ account: key(account), draftId, messageId, createdAt: new Date().toISOString() });
     await save(home, entries);
   });
@@ -127,7 +150,7 @@ export async function isCreatedDraft(
 
 export async function forgetCreatedDraft(home: string, account: string, draftId: string): Promise<void> {
   await withLock(home, async () => {
-    const entries = await load(home);
+    const entries = await load(home, true);
     await save(
       home,
       entries.filter((e) => !(e.account === key(account) && e.draftId === draftId)),
