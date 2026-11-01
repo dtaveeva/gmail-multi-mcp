@@ -340,6 +340,14 @@ export class ImapMailbox implements Mailbox {
 
   async sendDraft(draftId: string): Promise<string> {
     const draft = await this.getDraft(draftId);
+    // This path rebuilds the message from its text body, so attachments would
+    // be silently dropped and the original draft then deleted. Refuse instead.
+    if (draft.attachments.length) {
+      throw new UserFacingError(
+        "This draft has attachments, which cannot be sent over the app-password (IMAP) connection.",
+        "Send it from Gmail directly, or connect this account with OAuth.",
+      );
+    }
     const { drafts } = await this.specialFolders();
 
     const sent = await this.send({

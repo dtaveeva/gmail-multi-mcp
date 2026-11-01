@@ -1,6 +1,6 @@
 import { UserFacingError } from "../errors.js";
 import type { Gmail } from "../gmail/client.js";
-import { toGmailRaw, type OutgoingMessage } from "../gmail/mime.js";
+import { buildRawMessage, toGmailRaw, type OutgoingMessage } from "../gmail/mime.js";
 import { parseMessage, type ParsedMessage } from "../gmail/parse.js";
 import type { Backend, Label, Mailbox, SearchOptions, ThreadRef } from "./types.js";
 
@@ -77,6 +77,16 @@ export class GmailApiMailbox implements Mailbox {
   }
 
   async createDraft(message: OutgoingMessage, thread?: ThreadRef): Promise<string> {
+    if (message.attachments?.length) {
+      // A JSON `raw` body is capped well below Gmail's 25 MB message size, so
+      // drafts with attachments go through the media upload endpoint (35 MB).
+      const res = await this.gmail.users.drafts.create({
+        userId: "me",
+        requestBody: thread?.threadId ? { message: { threadId: thread.threadId } } : {},
+        media: { mimeType: "message/rfc822", body: buildRawMessage(message) },
+      });
+      return res.data.id ?? "";
+    }
     const res = await this.gmail.users.drafts.create({
       userId: "me",
       requestBody: {

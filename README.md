@@ -343,6 +343,8 @@ Every action lands in `~/.gmail-multi-mcp/audit.log` as JSONL. Message bodies ar
 | `GMAIL_MCP_MAX_SENDS_PER_HOUR` | `10` | Per account; `0` disables the cap |
 | `GMAIL_MCP_MAX_MUTATIONS_PER_HOUR` | `60` | Per account; `0` disables the cap |
 | `GMAIL_MCP_MAX_BODY_CHARS` | `20000` | Truncation point for message bodies |
+| `GMAIL_MCP_ATTACHMENT_ROOTS` | `~/Inbox` | Colon-separated absolute folders that `gmail_create_draft` may attach files from |
+| `GMAIL_MCP_MAX_ATTACHMENT_BYTES` | `26214400` | Combined size limit for attachments on one draft (25 MB) |
 | `GMAIL_MCP_PASSPHRASE` | unset | Encrypts the file-based token store with your passphrase |
 | `GMAIL_MCP_FORCE_FILE_STORE` | off | Skip the OS keychain and always use the encrypted file |
 | `GMAIL_MCP_NO_BROWSER` | off | Do not auto-open a browser during `auth add`; print the URL instead |

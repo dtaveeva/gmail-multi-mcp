@@ -76,6 +76,26 @@ export interface Config {
   confirmMode: ConfirmMode;
   /** Max message bodies to inline in one search result before truncating. */
   maxBodyChars: number;
+  /**
+   * Directories local attachments may be read from. A path outside every root
+   * is refused, so a prompt-injected request cannot attach ~/.ssh or token
+   * stores. Set with GMAIL_MCP_ATTACHMENT_ROOTS (colon-separated absolute
+   * paths); defaults to ~/Inbox only.
+   */
+  attachmentRoots: string[];
+  /** Combined byte limit for all attachments on one message. */
+  maxAttachmentBytes: number;
+}
+
+function envRoots(name: string, fallback: string[]): string[] {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const roots = raw
+    .split(":")
+    .map((r) => r.trim())
+    .filter((r) => r && path.isAbsolute(r))
+    .map((r) => path.resolve(r));
+  return roots.length ? roots : fallback;
 }
 
 export function loadConfig(): Config {
@@ -97,5 +117,11 @@ export function loadConfig(): Config {
     confirmMode:
       process.env.GMAIL_MCP_CONFIRM_MODE === "strict" ? "strict" : "inline",
     maxBodyChars: envInt("GMAIL_MCP_MAX_BODY_CHARS", 20_000),
+    attachmentRoots: envRoots("GMAIL_MCP_ATTACHMENT_ROOTS", [
+      path.join(os.homedir(), "Inbox"),
+    ]),
+    // Gmail's own ceiling is 25 MB per message; base64 then inflates it ~4/3,
+    // which still fits the 35 MB upload endpoint used for attachment drafts.
+    maxAttachmentBytes: envInt("GMAIL_MCP_MAX_ATTACHMENT_BYTES", 25 * 1024 * 1024),
   };
 }

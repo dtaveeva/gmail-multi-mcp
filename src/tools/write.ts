@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { UserFacingError } from "../errors.js";
+import { loadLocalAttachments } from "../gmail/attachments.js";
 import { previewText, type OutgoingMessage } from "../gmail/mime.js";
 import { AuditLog } from "../safety/audit.js";
 import {
@@ -64,7 +65,9 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext): void {
       title: "Create a Gmail draft",
       description:
         "Save a draft in the account. Drafts are never sent by this tool — a human " +
-        "sends them from Gmail, or gmail_send_draft does after confirmation.",
+        "sends them from Gmail, or gmail_send_draft does after confirmation. " +
+        "To attach files, pass absolute local paths in `attachments`; only files inside " +
+        "the server's allowed folders (default ~/Inbox) are accepted.",
       inputSchema: {
         account: z.string(),
         to: z.array(z.string()).min(1),
@@ -75,14 +78,32 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext): void {
           .string()
           .optional()
           .describe("Thread this draft as a reply to the given message id"),
+        attachments: z
+          .array(
+            z.object({
+              path: z.string().describe("Absolute path to a local file"),
+              filename: z
+                .string()
+                .optional()
+                .describe("Name shown to the recipient; defaults to the file's name"),
+            }),
+          )
+          .max(10)
+          .optional()
+          .describe("Local files to attach (absolute paths inside the allowed folders)"),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
-    async ({ account, to, subject, body, cc, reply_to_message_id }) =>
+    async ({ account, to, subject, body, cc, reply_to_message_id, attachments }) =>
       guarded(ctx, "gmail_create_draft", "execute", () => account, async () => {
         const { account: acct, mailbox } = await resolve(ctx, account);
         assertCapability(acct, "draft", ctx.cfg);
         assertRecipientsAllowed(acct, [...to, ...(cc ?? [])].flatMap(parseAddresses));
+        // Read and vet files before spending rate-limit budget on a doomed call.
+        const files = await loadLocalAttachments(attachments ?? [], {
+          roots: ctx.cfg.attachmentRoots,
+          maxBytes: ctx.cfg.maxAttachmentBytes,
+        });
         ctx.limiter.consume(acct.email, "mutation");
 
         const threading = reply_to_message_id
@@ -96,6 +117,7 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext): void {
           subject,
           body,
           ...(threading ? { inReplyTo: threading.messageId, references: threading.references } : {}),
+          ...(files.length ? { attachments: files } : {}),
         };
 
         await ctx.audit.record({
@@ -104,7 +126,23 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext): void {
           account: acct.email,
           phase: "execute",
           outcome: "ok",
-          detail: { to, cc, subject, body: AuditLog.digest(body), dryRun: ctx.cfg.dryRun },
+          detail: {
+            to,
+            cc,
+            subject,
+            body: AuditLog.digest(body),
+            dryRun: ctx.cfg.dryRun,
+            ...(files.length
+              ? {
+                  attachments: files.map((f) => ({
+                    filename: f.filename,
+                    path: f.sourcePath,
+                    bytes: f.content.length,
+                    sha256: f.sha256,
+                  })),
+                }
+              : {}),
+          },
         });
 
         if (ctx.cfg.dryRun) {
