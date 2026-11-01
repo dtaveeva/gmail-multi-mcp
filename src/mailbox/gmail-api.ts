@@ -2,7 +2,14 @@ import { UserFacingError } from "../errors.js";
 import type { Gmail } from "../gmail/client.js";
 import { toGmailRaw, type OutgoingMessage } from "../gmail/mime.js";
 import { parseMessage, type ParsedMessage } from "../gmail/parse.js";
-import type { Backend, Label, Mailbox, SearchOptions, ThreadRef } from "./types.js";
+import type {
+  Backend,
+  DraftSummary,
+  Label,
+  Mailbox,
+  SearchOptions,
+  ThreadRef,
+} from "./types.js";
 
 /** Mailbox backed by the Gmail REST API, authorised by scoped OAuth. */
 export class GmailApiMailbox implements Mailbox {
@@ -118,6 +125,39 @@ export class GmailApiMailbox implements Mailbox {
       requestBody: { id: draftId },
     });
     return res.data.id ?? "";
+  }
+
+  async listDrafts(maxResults: number, query?: string): Promise<DraftSummary[]> {
+    const res = await this.gmail.users.drafts.list({
+      userId: "me",
+      maxResults,
+      ...(query ? { q: query } : {}),
+    });
+    const out: DraftSummary[] = [];
+    for (const d of res.data.drafts ?? []) {
+      if (!d.id) continue;
+      const full = await this.gmail.users.drafts.get({
+        userId: "me",
+        id: d.id,
+        format: "metadata",
+      });
+      const msg = full.data.message;
+      if (!msg) continue;
+      const parsed = parseMessage(msg);
+      out.push({
+        draftId: d.id,
+        messageId: parsed.id,
+        to: parsed.to,
+        subject: parsed.subject,
+        date: parsed.date,
+        snippet: parsed.snippet,
+      });
+    }
+    return out;
+  }
+
+  async deleteDraft(draftId: string): Promise<void> {
+    await this.gmail.users.drafts.delete({ userId: "me", id: draftId });
   }
 
   async modifyLabels(ids: string[], add: string[], remove: string[]): Promise<void> {

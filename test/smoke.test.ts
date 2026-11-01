@@ -51,8 +51,10 @@ describe("server smoke test", () => {
       "gmail_connect_account",
       "gmail_connection_status",
       "gmail_create_draft",
+      "gmail_delete_draft",
       "gmail_disconnect_account",
       "gmail_list_accounts",
+      "gmail_list_drafts",
       "gmail_list_labels",
       "gmail_modify_labels",
       "gmail_read_message",
@@ -111,7 +113,12 @@ describe("server smoke test", () => {
   });
 
   it("exposes no permanent-delete or mail-settings tool", async () => {
-    const names = (await client.listTools()).tools.map((t) => t.name);
+    // gmail_delete_draft is the single, deliberate exception: drafts skip
+    // Trash, so deleting one is permanent by nature. It cannot reach sent or
+    // received mail. Anything else matching "delete" is still refused.
+    const names = (await client.listTools())
+      .tools.map((t) => t.name)
+      .filter((n) => n !== "gmail_delete_draft");
     for (const forbidden of ["delete", "forward", "filter", "settings"]) {
       assert.ok(
         !names.some((n) => n.includes(forbidden)),
@@ -126,6 +133,8 @@ describe("server smoke test", () => {
     assert.equal(byName.get("gmail_search")?.annotations?.readOnlyHint, true);
     assert.equal(byName.get("gmail_send")?.annotations?.destructiveHint, true);
     assert.equal(byName.get("gmail_trash")?.annotations?.destructiveHint, true);
+    assert.equal(byName.get("gmail_delete_draft")?.annotations?.destructiveHint, true);
+    assert.equal(byName.get("gmail_list_drafts")?.annotations?.readOnlyHint, true);
   });
 
   it("tells the user how to connect an account instead of crashing", async () => {

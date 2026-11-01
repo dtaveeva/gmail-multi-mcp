@@ -4,7 +4,7 @@ import nodemailer from "nodemailer";
 import { UserFacingError } from "../errors.js";
 import { buildRawMessage, type OutgoingMessage } from "../gmail/mime.js";
 import { htmlToText, type ParsedMessage } from "../gmail/parse.js";
-import type { Backend, Label, Mailbox, SearchOptions, ThreadRef } from "./types.js";
+import type { Backend, DraftSummary, Label, Mailbox, SearchOptions, ThreadRef } from "./types.js";
 
 export interface ImapCredentials {
   email: string;
@@ -356,6 +356,46 @@ export class ImapMailbox implements Mailbox {
     });
 
     return sent;
+  }
+
+  async listDrafts(maxResults: number, query?: string): Promise<DraftSummary[]> {
+    const { drafts } = await this.specialFolders();
+
+    return this.withFolder(
+      drafts,
+      async (client) => {
+        const uids = await client.search(query ? { gmraw: query } : { all: true }, { uid: true });
+        if (!uids || !uids.length) return [];
+        const newest = uids.slice(-maxResults).reverse();
+        const out: DraftSummary[] = [];
+        for await (const msg of client.fetch(
+          newest,
+          { source: true, labels: true, threadId: true, uid: true },
+          { uid: true },
+        )) {
+          const parsed = await toParsedMessage(msg);
+          out.push({
+            draftId: String(msg.uid),
+            messageId: parsed.id,
+            to: parsed.to,
+            subject: parsed.subject,
+            date: parsed.date,
+            snippet: parsed.snippet || parsed.body.slice(0, 120),
+          });
+        }
+        return out.reverse();
+      },
+      true,
+    );
+  }
+
+  async deleteDraft(draftId: string): Promise<void> {
+    const { drafts } = await this.specialFolders();
+    await this.withFolder(drafts, async (client) => {
+      const msg = await client.fetchOne(draftId, { uid: true }, { uid: true });
+      if (!msg) throw new UserFacingError(`No draft with id ${draftId} in ${this.creds.email}.`);
+      await client.messageDelete(draftId, { uid: true });
+    });
   }
 
   async modifyLabels(ids: string[], add: string[], remove: string[]): Promise<void> {
