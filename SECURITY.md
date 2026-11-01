@@ -57,7 +57,7 @@ Refused at message construction. Without this check, a smuggled `Bcc` header wou
 
 - Sliding hourly caps per account, per action class (default 10 sends, 60 other mutations).
 - Bulk operations are capped at 100 message ids per call and are themselves confirmed.
-- There is no permanent-delete tool. Trash is recoverable for 30 days.
+- There is no permanent-delete tool for mail. Trash is recoverable for 30 days. The one exception, `gmail_delete_draft`, can only remove drafts this server itself created (see below).
 
 ### Wrong-account actions
 
@@ -111,7 +111,7 @@ Stated plainly, because a misunderstood boundary is worse than a missing feature
 
 **`readonly` is the only provider-enforced tier.** `draft` needs `gmail.compose`, which technically also permits sending — so "draft can't send" is enforced by this server's code, not by Google. The distinction is documented rather than smoothed over, because a user who believes `draft` is cryptographically sealed would make worse decisions than one who knows it is a software check.
 
-**Drafts are not confirmed.** A draft never leaves the mailbox and is trivially reversible. Making the safe path frictionless is what makes the `draft` tier worth choosing over `send`.
+**Creating a draft is not confirmed.** A draft never leaves the mailbox and is trivially reversible. Making the safe path frictionless is what makes the `draft` tier worth choosing over `send`.
 
 **Deleting a draft is confirmed, and limited to the server's own drafts.** Gmail drafts skip Trash, so `gmail_delete_draft` is permanent. To keep the `draft` tier's promise that nothing of the user's is lost, it refuses any draft id this server did not create (tracked in `created-drafts.json`, mode 0600), so a prompt-injected call can at most undo the server's own drafts. It is two-phase, takes exactly one id (over IMAP a single positive UID, never a range), and shows the draft inside the untrusted-content fence before the token is issued.
 

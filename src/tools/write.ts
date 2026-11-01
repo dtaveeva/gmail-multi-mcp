@@ -116,10 +116,18 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext): void {
         // Remember it, so gmail_delete_draft can undo this — and only this.
         // The message id is pinned as created, so a reused or edited draft
         // can't match later. A failed write only means this tool can't delete it.
-        await recordCreatedDraft(ctx.cfg.home, acct.email, draftId, messageId).catch(() => {});
+        const registered = messageId
+          ? await recordCreatedDraft(ctx.cfg.home, acct.email, draftId, messageId).then(
+              () => true,
+              () => false,
+            )
+          : false;
+        const note = registered
+          ? ""
+          : "\n  note: not registered for gmail_delete_draft; delete it in Gmail if needed.";
 
         return text(
-          `Draft saved in ${acct.email}.\n  draft id: ${draftId}\n\n${previewText(msg)}`,
+          `Draft saved in ${acct.email}.\n  draft id: ${draftId}${note}\n\n${previewText(msg)}`,
         );
       }),
   );
