@@ -29,7 +29,6 @@ interface Entry {
 
 const FILE = "created-drafts.json";
 const MAX_ENTRIES = 1000;
-const LOCK_STALE_MS = 60_000;
 const LOCK_WAIT_MS = 5_000;
 
 const fileIn = (home: string) => path.join(home, FILE);
@@ -75,9 +74,10 @@ async function save(home: string, entries: Entry[]): Promise<void> {
 
 /**
  * Serialise read-modify-write across calls and processes with an O_EXCL lock
- * file holding `pid:token`. The holder only removes a lock that still carries
- * its own token. A lock is taken over only when it is old AND its owning
- * process is gone, so a slow but live writer is never overrun.
+ * file holding a per-call token. Only the holder removes it. A lock is never
+ * taken over automatically: two waiters can't both safely decide it is stale,
+ * and the cost of waiting out a crashed holder is only that a draft can't be
+ * registered (so can't be deleted by this tool) — the safe direction.
  */
 async function withLock<T>(home: string, fn: () => Promise<T>): Promise<T> {
   await fs.mkdir(home, { recursive: true, mode: 0o700 });
@@ -92,11 +92,11 @@ async function withLock<T>(home: string, fn: () => Promise<T>): Promise<T> {
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      if (await isAbandoned(lock)) {
-        await fs.rm(lock, { force: true });
-        continue;
+      if (Date.now() > deadline) {
+        throw new Error(
+          `created-drafts registry is locked (${lock}). If no gmail-multi-mcp is running, delete that file.`,
+        );
       }
-      if (Date.now() > deadline) throw new Error("created-drafts registry is locked");
       await new Promise((r) => setTimeout(r, 20 + Math.random() * 30));
     }
   }
@@ -105,19 +105,6 @@ async function withLock<T>(home: string, fn: () => Promise<T>): Promise<T> {
   } finally {
     const held = await fs.readFile(lock, "utf8").catch(() => "");
     if (held === token) await fs.rm(lock, { force: true });
-  }
-}
-
-async function isAbandoned(lock: string): Promise<boolean> {
-  const st = await fs.stat(lock).catch(() => undefined);
-  if (!st || Date.now() - st.mtimeMs < LOCK_STALE_MS) return false;
-  const pid = Number.parseInt((await fs.readFile(lock, "utf8").catch(() => "")).split(":")[0] ?? "", 10);
-  if (!Number.isInteger(pid) || pid <= 0) return true;
-  try {
-    process.kill(pid, 0);
-    return false; // owner still alive: keep waiting
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "ESRCH";
   }
 }
 

@@ -61,14 +61,13 @@ describe("created-drafts registry", () => {
 });
 
 describe("registry lock", () => {
-  it("waits for a live holder instead of taking its lock", async () => {
+  it("never takes over someone else's lock, however old", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "gmm-drafts-"));
     try {
       const lock = path.join(home, "created-drafts.json.lock");
       await fs.writeFile(lock, `${process.pid}:someone-else`);
       const old = new Date(Date.now() - 10 * 60 * 1000);
       await fs.utimes(lock, old, old);
-      // Our own pid is alive, so even an old lock must not be stolen.
       await assert.rejects(recordCreatedDraft(home, "a@x.com", "r1", "m1"), /locked/);
       assert.equal(await fs.readFile(lock, "utf8"), `${process.pid}:someone-else`);
     } finally {
@@ -76,19 +75,6 @@ describe("registry lock", () => {
     }
   });
 
-  it("takes over an old lock whose process is gone", async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "gmm-drafts-"));
-    try {
-      const lock = path.join(home, "created-drafts.json.lock");
-      await fs.writeFile(lock, "999999:dead");
-      const old = new Date(Date.now() - 10 * 60 * 1000);
-      await fs.utimes(lock, old, old);
-      await recordCreatedDraft(home, "a@x.com", "r1", "m1");
-      assert.equal(await isCreatedDraft(home, "a@x.com", "r1", "m1"), true);
-    } finally {
-      await fs.rm(home, { recursive: true, force: true });
-    }
-  });
 });
 
 describe("assertSingleUid", () => {

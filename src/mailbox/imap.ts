@@ -302,8 +302,22 @@ export class ImapMailbox implements Mailbox {
     const messageId = await this.withFolder(
       drafts,
       async (c) => {
+        // If UIDVALIDITY moved between APPEND and SELECT, this UID may now
+        // name another message. Return no id, so the draft is not registered
+        // as ours (it just can't be deleted by gmail_delete_draft).
+        const box = c.mailbox;
+        if (
+          !res.uidValidity ||
+          !box ||
+          typeof box === "boolean" ||
+          String(box.uidValidity) !== String(res.uidValidity)
+        ) {
+          return "";
+        }
         const msg = await c.fetchOne(draftId, { uid: true, emailId: true } as never, { uid: true });
-        return msg ? toHexId((msg as { emailId?: string }).emailId) : "";
+        return msg && String(msg.uid) === draftId
+          ? toHexId((msg as { emailId?: string }).emailId)
+          : "";
       },
       true,
     );
